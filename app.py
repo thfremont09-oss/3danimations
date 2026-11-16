@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 
 import streamlit as st
-import streamlit.components.v1 as components
 
 from story3d import build_storyboard, render_html
 
@@ -84,7 +83,12 @@ if not board["scenes"]:
     st.stop()
 
 html = render_html(board, show_captions=captions)
-components.html(html, height=height, scrolling=False)
+if hasattr(st, "iframe"):
+    st.iframe(html, height=height)
+else:  # Streamlit < 1.56
+    import streamlit.components.v1 as components
+
+    components.html(html, height=height, scrolling=False)
 
 left, mid, right = st.columns([1, 1, 2])
 left.download_button("Download as standalone HTML", html, "story3d.html", "text/html",

@@ -159,3 +159,25 @@ def test_style_is_passed_to_the_viewer():
     board = build_storyboard("A fox ran.")
     assert '"style": "2d"' in render_html(board, style="2d")
     assert '"style": "3d"' in render_html(board)
+
+
+def test_the_slain_die_and_do_not_come_back_to_celebrate():
+    board = build_storyboard("The pirate slayed the dragon. They danced and celebrated.")
+    assert cast(board["scenes"][0]) == {"pirate": "slay", "dragon": "die"}
+    assert cast(board["scenes"][1]) == {"pirate": "dance"}
+    one = scene("The pirate slayed the dragon and the townspeople celebrated with them.")
+    assert cast(one)["dragon"] == "die" and cast(one)["person"] == "jump"
+
+
+def test_death_by_pronoun_passive_and_plain_dying():
+    board = build_storyboard("A knight met a dragon. He slew it. He walked past the dragon.")
+    assert cast(board["scenes"][1]) == {"knight": "slay", "dragon": "die"}
+    assert cast(board["scenes"][2]) == {"knight": "walk", "dragon": "dead"}
+    assert cast(scene("The king was killed by a wolf.")) == {"king": "die", "wolf": "slay"}
+    assert cast(scene("The old king died.")) == {"king": "die"}
+
+
+def test_an_ordinary_fight_kills_nobody():
+    board = build_storyboard("The knight fought the dragon. They slept.")
+    assert cast(board["scenes"][0]) == {"knight": "fight", "dragon": "fight"}
+    assert cast(board["scenes"][1]) == {"knight": "sleep", "dragon": "sleep"}

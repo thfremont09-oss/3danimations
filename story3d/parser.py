@@ -166,6 +166,7 @@ class _World:
         self.weather = "clear"
         self.cast: list[dict] = []   # recently seen actors, newest first
         self.last_size = 0           # how many of them were in the latest scene
+        self.dead: set[str] = set()  # ids of characters who have died
         self.name_kind: dict[str, str] = {}
         self.last_concrete = -99
         # creative liberty (0 = literal)
@@ -267,12 +268,20 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
     subjects = [i for i, w in enumerate(lows)
                 if w in L.SUBJECT_PRONOUNS or (w == "it" and i + 1 in action_at)]
     plural = bool(low_set & {"they", "them", "their", "theirs"})
+    dead_before = set(world.dead)
+    if low_set & L.REVIVE_WORDS:
+        world.dead -= set(actors)
+        dead_before -= set(actors)
+    for actor in cast:
+        if actor["id"] in dead_before:
+            actor["action"] = "dead"     # still lying where they fell
+    living = [a for a in world.cast if a["id"] not in world.dead]   # the dead stay out
+    latest = [a for a in world.cast[: world.last_size] if a["id"] not in world.dead]
     if plural:
-        recalled = world.cast[: max(world.last_size, 2)]
+        recalled = living[: max(len(latest), 2)]
     else:  # he / she / it: prefer a single character over a group
-        latest = world.cast[: world.last_size]
         recalled = ([a for a in latest if a["count"] == 1]
-                    or [a for a in world.cast if a["count"] == 1][:1] or latest)
+                    or [a for a in living if a["count"] == 1][:1] or latest)
     if not cast:
         if recalled and (low_set & L.PRONOUNS or subjects or physical):
             for prev in recalled:
@@ -289,6 +298,42 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
             extra = [p for p in recalled if p["id"] not in present][:2]
             for prev in extra:
                 cast.insert(0, {**prev, "action": act_for(prev["kind"], lead[0])})
+
+    # ---- life and death --------------------------------------------------
+    placed = sorted((a for a in cast if a.get("pos", -1) >= 0), key=lambda a: a["pos"])
+    for i, low in enumerate(lows):
+        hit = _find(low, L.KILL_WORDS)
+        if not hit:
+            continue
+        before = next((a for a in reversed(placed) if a["pos"] < i), None)
+        after = next((a for a in placed if a["pos"] > i), None)
+        killer = None
+        if hit[0] == "die":
+            victim = before or (cast[0] if len(cast) == 1 else None)
+        elif set(lows[max(0, i - 2): i]) & L.PASSIVE_MARKERS:      # "was slain by ..."
+            victim = before
+            killer = after if after and "by" in lows[i + 1: after["pos"]] else None
+        else:
+            victim, killer = after, before
+            if victim is None and set(lows[i + 1: i + 3]) & L.OBJECT_PRONOUNS:
+                # "He slew it": the pronouns brought the cast back in the order they
+                # were introduced, so the object is the last of them.
+                carried = [a for a in cast if a.get("pos", -1) < 0]
+                present = {a["id"] for a in cast}
+                gone = next((p for p in living if p["id"] not in present), None)
+                if len(carried) > 1:
+                    victim = carried[-1]
+                elif gone:
+                    victim = {**gone}
+                    cast.append(victim)
+            if killer is None:
+                killer = next((a for a in cast if a is not victim), None)
+        if victim is None or victim["id"] in dead_before:
+            continue
+        victim["action"] = "die"
+        world.dead.add(victim["id"])
+        if killer is not None and killer is not victim and killer["action"] != "die":
+            killer["action"] = "slay"
 
     # ---- where and when --------------------------------------------------
     models = [L.MODELS[a["kind"]] for a in cast]

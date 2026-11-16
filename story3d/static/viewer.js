@@ -185,7 +185,15 @@ function buildQuad(o) {
       wings.push(p);
     }
   }
-  g.userData = { legs, tail, wings, quad: true, height: hy + W * 0.6, sink: H * 0.85 };
+  let breath = null;
+  if (o.breath) {
+    breath = mesh(cone(W * 0.55, L * 0.9, 8), glow('#ff8a1c', 2.6), 0, hy - W * 0.1, hz + W * 0.5 + L * 0.45);
+    breath.rotation.x = -Math.PI / 2;
+    breath.castShadow = false;
+    breath.visible = false;
+    g.add(breath);
+  }
+  g.userData = { breath, legs, tail, wings, quad: true, height: hy + W * 0.6, sink: H * 0.85 };
   return g;
 }
 
@@ -330,6 +338,9 @@ function buildBalloon(o, id) {
 
 const BUILDERS = { ufo: buildUfo, balloon: buildBalloon, person: buildPerson, robot: buildRobot, quad: buildQuad, bird: buildBird,
   fish: buildFish, boat: buildBoat, car: buildCar, rocket: buildRocket, plane: buildPlane };
+const FIGHTING = new Set(['fight', 'slay', 'die']);
+const BEAT = 0.95;        // seconds per exchange of blows
+const DUEL_END = 0.62;    // fraction of the scene at which a fight to the death is settled
 const FOOTPRINT = { boat: 4.2, car: 3.2, rocket: 2.6, plane: 4.2, ufo: 3.2, balloon: 3.6 };
 
 function makeActor(spec, n, stage) {
@@ -347,6 +358,12 @@ function makeActor(spec, n, stage) {
     label.position.y = ud.height * s + 0.45;
     wrap.add(label);
   }
+  if (FIGHTING.has(spec.action) && ud.arms) {      // fighters on two legs carry a blade
+    const steel = mat('#d9dee6', { metalness: 0.85, roughness: 0.25 });
+    const blade = mesh(box(0.05, 0.05, 0.95), steel, 0, -0.62, 0.5);
+    blade.add(mesh(box(0.3, 0.06, 0.06), mat('#6b4a2b'), 0, 0, -0.42));
+    ud.arms[1].add(blade);
+  }
   let zzz = null;
   if (spec.action === 'sleep') {
     zzz = textSprite('z z z', { height: 0.5, color: '#e8ecff' });
@@ -361,12 +378,14 @@ function makeActor(spec, n, stage) {
     scale: s, flying: act === 'fly' && !['rocket', 'person', 'robot', 'balloon'].includes(base),
     ambient: !!spec.ambient, base,
     moving: act === 'walk' || act === 'run' || act === 'swim',
-    x0: 0, z0: 0, y0: 0, facing: 0,
+    x0: 0, z0: 0, y0: 0, facing: 0, duel: false, action: act,
   };
 
   actor.update = (t, dur) => {
     let x = actor.x0, y = actor.y0, z = actor.z0, heading = actor.facing;
     let swing = 0, armsUp = 0, flap = 0, focusY = null;
+    const held = [false, false];             // arms posed by the action itself
+    if (ud.breath) ud.breath.visible = false;
     g.rotation.set(0, 0, 0);
     g.position.set(0, 0, 0);
     if (ud.head) ud.head.rotation.set(0, 0, 0);
@@ -430,8 +449,8 @@ function makeActor(spec, n, stage) {
         y += -1.2 * s + Math.sin(t * 2.2 + ph) * 0.06;
         swing = Math.sin(t * 5 + ph) * 0.9;
       }
-    } else if (act === 'sleep' || act === 'fall') {
-      const u = act === 'sleep' ? 1 : ease(clamp((t - dur * 0.4) / 0.5, 0, 1));
+    } else if (act === 'sleep' || act === 'fall' || act === 'dead') {
+      const u = act === 'fall' ? ease(clamp((t - dur * 0.4) / 0.5, 0, 1)) : 1;
       if (ud.quad && act === 'sleep') {
         g.position.y = -ud.sink;
       } else {
@@ -448,12 +467,45 @@ function makeActor(spec, n, stage) {
       if (ud.head) ud.head.rotation.x = mine ? Math.sin(t * 9) * 0.1 : 0;
       if (ud.arms && mine) ud.arms[0].rotation.x = -0.6 - Math.sin(t * 6) * 0.35;
       y += mine ? Math.abs(Math.sin(t * 9)) * 0.02 : 0;
-    } else if (act === 'fight') {
-      const lunge = Math.max(0, Math.sin(t * 5 + n * Math.PI));
-      x += Math.sin(heading) * lunge * 0.55;
-      z += Math.cos(heading) * lunge * 0.55;
-      if (ud.arms) ud.arms[1].rotation.x = -1.2 - lunge * 1.2;
-      g.rotation.x = lunge * 0.2;
+    } else if (act === 'fight' || act === 'slay' || act === 'die') {
+      // A duel in beats: one side winds up, lunges and strikes while the other
+      // blocks and is knocked back, then they swap. "slay" / "die" end it at DUEL_END.
+      const over = act !== 'fight' && (t >= dur * DUEL_END || !actor.duel);
+      if (!over) {
+        const k = Math.floor(t / BEAT), p = t / BEAT - k;
+        const attacking = (k + (actor.facing < 0 ? 1 : 0)) % 2 === 0 || !actor.duel;
+        const reach = 0.7 + 0.25 * s;
+        let adv = 0, lean = 0;
+        if (attacking) {
+          const wind = clamp(p / 0.3, 0, 1), hit = ease(clamp((p - 0.3) / 0.14, 0, 1));
+          const back = ease(clamp((p - 0.55) / 0.45, 0, 1));
+          adv = -0.25 * wind + (0.25 + reach) * hit - reach * back;
+          lean = -0.3 * wind + 0.75 * hit - 0.45 * back;
+          y += Math.sin(Math.PI * clamp((p - 0.25) / 0.4, 0, 1)) * 0.35 * s;
+          if (ud.arms) { ud.arms[1].rotation.x = -2.7 * wind + 2.3 * hit - 0.6 * back - 0.4; held[1] = true; }
+          if (ud.breath) { ud.breath.visible = p > 0.3 && p < 0.72; ud.breath.scale.z = 0.7 + Math.sin(t * 40) * 0.3; }
+          flap = Math.sin(t * 14) * 0.6;
+        } else {
+          const hit = ease(clamp((p - 0.42) / 0.12, 0, 1)), back = ease(clamp((p - 0.62) / 0.38, 0, 1));
+          adv = -0.55 * hit + 0.55 * back;
+          lean = -0.4 * hit + 0.4 * back;
+          x += Math.sin(t * 60) * 0.03 * hit * (1 - back);
+          if (ud.arms) { ud.arms[0].rotation.x = -1.5; ud.arms[1].rotation.x = -0.9; held[0] = held[1] = true; }
+          flap = 0.3;
+        }
+        x += Math.sin(heading) * adv;
+        z += Math.cos(heading) * adv;
+        g.rotation.x = lean * (ud.quad ? 0.45 : 1);
+      } else if (act === 'slay') {
+        armsUp = 1;                                    // the winner celebrates
+        y += Math.abs(Math.sin(t * 4.5 + ph)) * 0.45;
+      } else {
+        const start = actor.duel ? dur * DUEL_END : dur * 0.4;
+        const u = ease(clamp((t - start) / 0.55, 0, 1));
+        g.rotation.z = u * Math.PI / 2 * (actor.facing < 0 ? -1 : 1);
+        g.position.y = u * 0.25;
+        flap = lerp(flap, -1.35, u);                   // wings fold as it falls
+      }
     } else if (act === 'wave') {
       if (ud.arms) { ud.arms[1].userData.raise = 2.4 + Math.sin(t * 9 + ph) * 0.35; }
       else y += Math.abs(Math.sin(t * 4 + ph)) * 0.2;
@@ -472,7 +524,7 @@ function makeActor(spec, n, stage) {
       g.rotation.z = Math.sin(t * 1.3 + ph) * 0.07;
       g.rotation.x = Math.sin(t * 0.9 + ph) * 0.04;
     }
-    if (base === 'bird' && act !== 'fly') flap = Math.sin(t * 2 + ph) * 0.08 - 0.5;
+    if (base === 'bird' && act !== 'fly' && !FIGHTING.has(act)) flap = Math.sin(t * 2 + ph) * 0.08 - 0.5;
     const pair = [1, -1, -1, 1];
     if (ud.legs && act !== 'fly') {
       ud.legs.forEach((leg, i) => {
@@ -482,7 +534,7 @@ function makeActor(spec, n, stage) {
     if (ud.arms) {
       ud.arms.forEach((arm, i) => {
         if (act === 'talk' && arm.rotation.x < -0.5 && i === 0) return;
-        if ((act === 'fight' || act === 'work') && i === 1) return;
+        if (held[i] || (act === 'work' && i === 1)) return;
         arm.rotation.x = -swing * (i ? -1 : 1) * 0.8;
         arm.rotation.z = arm.userData.side * (arm.userData.raise || 0.12 + armsUp * 2.5);
         arm.userData.raise = 0;
@@ -1218,8 +1270,26 @@ function buildWorldShot(sc, idx) {
     }
     root.add(a.wrap);
   });
-  const facing = sc.actors.some((s) => !s.ambient && (s.action === 'talk' || s.action === 'fight')) && cast.length > 1;
+  const fighters = cast.filter((a) => FIGHTING.has(a.action));
+  const duel = fighters.length > 1;
+  fighters.forEach((a) => { a.duel = duel; });
+  const toTheDeath = fighters.some((a) => a.action !== 'fight');
+  const facing = (duel || sc.actors.some((s) => !s.ambient && s.action === 'talk')) && cast.length > 1;
+  // Sparks where the blows land.
+  const spark = new THREE.Group();
+  if (duel) {
+    for (let i = 0; i < 7; i++) {
+      const ray = mesh(box(0.07, 0.07, 0.9), glow(i % 2 ? '#fff3b0' : '#ffb347', 3));
+      ray.castShadow = false;
+      ray.rotation.set(R() * 6, R() * 6, R() * 6);
+      spark.add(ray);
+    }
+    spark.visible = false;
+    root.add(spark);
+  }
   const mid = (cast.length - 1) / 2;
+  // Duellists stand a stride apart so their lunges meet in the middle.
+  if (duel) cast.forEach((a, j) => { a.x0 += (j <= mid ? -1 : 1) * (0.9 + (a.base === 'quad' ? a.width * 0.2 : 0)); });
   cast.forEach((a, j) => { a.facing = facing ? (j <= mid ? Math.PI / 2 : -Math.PI / 2) : (j - mid) * -0.12; });
 
   const biggest = cast.reduce((m, a) => Math.max(m, a.scale), 1);
@@ -1242,12 +1312,29 @@ function buildWorldShot(sc, idx) {
         focus.set(0, 0, 0);
         leads.forEach((a) => focus.add(a.focus));
         focus.multiplyScalar(1 / leads.length);
+      }
+      let impact = 0;
+      if (duel && (!toTheDeath || t < sc.duration * DUEL_END)) {
+        const p = (t / BEAT) % 1;
+        impact = p > 0.4 && p < 0.58 ? Math.sin(Math.PI * (p - 0.4) / 0.18) : 0;
+      }
+      spark.visible = impact > 0;
+      if (impact) {
+        spark.position.copy(fighters[0].focus).add(fighters[fighters.length - 1].focus).multiplyScalar(0.5);
+        spark.scale.setScalar(0.4 + impact * 1.1);
+        spark.rotation.z = Math.floor(t / BEAT) * 1.3;
+      }
+      if (cast.length) {
       } else if (sc.props.length) {
         focus.set(0, 2.2, -Math.min(sc.props[0].r, 12) * 0.6);
       } else if (extras.length) {
         focus.set(0, 1.8, -4);
       }
       cam(t, sc.duration, focus, camera);
+      if (impact) {                                   // the camera feels each hit
+        camera.position.x += Math.sin(t * 95) * 0.07 * impact;
+        camera.position.y += Math.cos(t * 80) * 0.05 * impact;
+      }
     },
   };
 }

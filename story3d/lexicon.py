@@ -79,7 +79,7 @@ MODELS: dict[str, dict] = {
                "tail": 0.1, "speed": 0.3},
     "dinosaur": {"base": "quad", "color": "#4f8a55", "len": 3.0, "leg": 1.3, "width": 1.0,
                  "neck": 1.0, "tail": 2.0, "scale": 1.4},
-    "dragon": {"base": "quad", "color": "#b5342b", "len": 2.6, "leg": 0.8, "width": 0.9,
+    "dragon": {"base": "quad", "breath": True, "color": "#b5342b", "len": 2.6, "leg": 0.8, "width": 0.9,
                "neck": 0.8, "ears": "up", "tail": 1.8, "wings": True, "default": "fly"},
     # flyers
     "bird": {"base": "bird", "color": "#3f88c5", "default": "fly"},
@@ -606,7 +606,7 @@ ACTION_WORDS = _words({
         "gossip joke beg plead complain confess warn thank welcome introduce "
         "converse debate scold command",
     "fight":
-        "fight battle attack strike struggle wrestle duel defeat slay clash "
+        "fight kill murder destroy vanquish behead slaughter assassinate devour battle attack strike struggle wrestle duel defeat slay clash "
         "punch kick stab slash shoot bite claw ambush raid invade conquer "
         "quarrel brawl spar",
     "look":
@@ -624,8 +624,18 @@ ACTION_WORDS = _words({
         "mourn weep sob smile nod ",
 })
 VEHICLES = {"boat", "car", "rocket", "plane", "balloon", "ufo"}
+# Death. "kill" verbs take a victim ("the pirate slew the dragon"); "die" words
+# apply to their subject ("the king died").
+KILL_WORDS = _words({
+    "kill": "slay kill murder destroy vanquish behead slaughter assassinate devour",
+    "die": "die perish dead",
+})
+REVIVE_WORDS = {"revive", "revived", "resurrect", "resurrected", "reborn", "alive"}
+PASSIVE_MARKERS = {"was", "were", "is", "are", "been", "be", "got", "being"}
+OBJECT_PRONOUNS = {"it", "him", "her", "them"}
+
 PHYSICAL_ACTIONS = {"walk", "run", "fly", "jump", "dance", "swim", "sleep", "fall", "fight",
-                    "wave", "work"}
+                    "wave", "work", "slay", "die"}
 
 MOOD_WORDS = _words({
     "joyful":
@@ -655,7 +665,7 @@ MOOD_WORDS = _words({
 })
 
 IRREGULAR = {
-    "ran": "run", "flew": "fly", "flown": "fly", "swam": "swim", "swum": "swim",
+    "slew": "slay", "slain": "slay", "ran": "run", "flew": "fly", "flown": "fly", "swam": "swim", "swum": "swim",
     "fell": "fall", "fallen": "fall", "slept": "sleep", "sang": "sing", "sung": "sing",
     "went": "go", "gone": "go", "came": "come", "fought": "fight", "rode": "ride",
     "drove": "drive", "saw": "see", "seen": "see", "found": "find", "stood": "stand",

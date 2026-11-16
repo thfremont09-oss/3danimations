@@ -178,6 +178,6 @@ def test_death_by_pronoun_passive_and_plain_dying():
 
 
 def test_an_ordinary_fight_kills_nobody():
-    board = build_storyboard("The knight fought the dragon. They slept.")
+    board = build_storyboard("The knight fought the dragon. Then they both slept.")
     assert cast(board["scenes"][0]) == {"knight": "fight", "dragon": "fight"}
     assert cast(board["scenes"][1]) == {"knight": "sleep", "dragon": "sleep"}

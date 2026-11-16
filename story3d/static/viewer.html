@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Story3D</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  #wrap { position: relative; width: 100%; height: 100vh; background: #000; }
+  #stage { display: block; width: 100%; height: 100%; }
+  #fade { position: absolute; inset: 0; background: #000; opacity: 0; pointer-events: none; }
+  #badge { position: absolute; top: 12px; left: 14px; color: #fff; font-size: 12px;
+    letter-spacing: .06em; text-transform: uppercase; opacity: .8;
+    background: rgba(0,0,0,.35); padding: 4px 9px; border-radius: 99px; }
+  #caption { position: absolute; left: 50%; transform: translateX(-50%); bottom: 58px;
+    width: max-content; max-width: 84%; box-sizing: border-box; text-align: center;
+    color: #fff; font-size: clamp(14px, 2.1vw, 21px); line-height: 1.35;
+    background: rgba(0,0,0,.5); padding: .45em .9em; border-radius: 10px; }
+  #caption:empty { display: none; }
+  #bar { position: absolute; left: 0; right: 0; bottom: 0; display: flex; gap: 10px;
+    align-items: center; padding: 10px 14px; color: #fff; font-size: 13px;
+    background: linear-gradient(transparent, rgba(0,0,0,.75)); }
+  #bar button { background: rgba(255,255,255,.14); color: #fff; border: 0;
+    border-radius: 6px; padding: 6px 11px; font: inherit; cursor: pointer; white-space: nowrap; }
+  #bar button:hover { background: rgba(255,255,255,.26); }
+  #bar button.on { background: #d83a3a; }
+  #seek { flex: 1; min-width: 40px; accent-color: #fff; }
+  #time { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  #error { position: absolute; inset: 0; display: none; align-items: center;
+    justify-content: center; color: #fff; padding: 24px; text-align: center; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="stage"></canvas>
+  <div id="fade"></div>
+  <div id="badge"></div>
+  <div id="caption"></div>
+  <div id="error"></div>
+  <div id="bar">
+    <button id="play" title="Play / pause (space)">Pause</button>
+    <input id="seek" type="range" min="0" max="1000" value="0" aria-label="Timeline">
+    <span id="time">0:00 / 0:00</span>
+    <button id="rec" title="Play from the start and save a video">Record</button>
+    <button id="full" title="Fullscreen">Fullscreen</button>
+  </div>
+</div>
+<script type="application/json" id="story-data">__STORY_JSON__</script>
+<script type="importmap">{"imports": {"three": "__THREE_URL__"}}</script>
+<script type="module">
+__VIEWER_JS__
+</script>
+</body>
+</html>

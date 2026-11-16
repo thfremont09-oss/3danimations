@@ -21,8 +21,11 @@ def _shell() -> str:
     )
 
 
-def render_html(storyboard: dict, show_captions: bool = True) -> str:
-    """Return a standalone HTML document (no network access needed) for a storyboard."""
-    data = {**storyboard, "options": {"captions": show_captions}}
+def render_html(storyboard: dict, show_captions: bool = True, style: str = "3d") -> str:
+    """Return a standalone HTML document (no network access needed) for a storyboard.
+
+    style: "3d" for the lit, free-camera look, or "2d" for flat colours seen side-on.
+    """
+    data = {**storyboard, "options": {"captions": show_captions, "style": style}}
     payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
     return _shell().replace("__STORY_JSON__", payload)

@@ -1,7 +1,7 @@
 # Story3D
 
-Type a story, an essay or any short text and watch it play as a 3D animation,
-in a Streamlit app.
+Type a story, an essay or any short text and watch it play as a 3D or 2D
+animation, in a Streamlit app.
 
 The text is split into scenes. Each scene is staged with low-poly characters,
 animals, vehicles, props, a place, a time of day, weather and a camera move.
@@ -32,7 +32,14 @@ example or paste your own text, and press **Create animation**.
 - **Download as standalone HTML** gives one file that plays offline anywhere.
 - **Storyboard** (expander under the player) shows how each sentence was read:
   place, time, weather, mood, cast and actions.
-- Sidebar: pace, maximum number of scenes, captions on/off, player height.
+- **Style** (sidebar): 3D is a lit low-poly world with a moving camera; 2D shows
+  the same scenes in flat colours from the side, like a paper cut-out.
+- **Creative liberty** (sidebar): *Literal* stages only what the text says.
+  *Some* and *Lots* let the app add background life (gulls, a passing boat,
+  villagers), set dressing, mood weather and a time of day the text left open.
+  It never changes the place, cast or actions you wrote.
+- **Reimagine** gives another take on the same text.
+- Sidebar also has pace, maximum number of scenes, captions on/off, player height.
 
 ## How the text is interpreted
 
@@ -49,7 +56,13 @@ The parser (`story3d/parser.py`) is rule-based and looks words up in
 | Mood | happy, afraid, lonely, strange | colour grade and camera |
 
 Place, time, weather and cast carry over from scene to scene, and pronouns
-("they slept") bring back the characters last seen.
+("they slept") bring back the characters last seen. Plural and group words
+("townspeople", "villagers", "three dogs") put a group on stage. When a
+sentence names two places ("a village by the sea"), the water wins and the
+other becomes scenery.
+
+The vocabulary is about 1,800 words covering 93 kinds of character, animal
+and vehicle and 31 props.
 
 It is a keyword reader, not a language model, so it only stages words it
 knows. To teach it more, add words to the tables in `story3d/lexicon.py`; new
@@ -72,8 +85,8 @@ Use it without Streamlit:
 ```python
 from story3d import build_storyboard, render_html
 
-board = build_storyboard("At night a fox ran through the forest.")
-open("fox.html", "w").write(render_html(board))
+board = build_storyboard("At night a fox ran through the forest.", liberty=1)
+open("fox.html", "w").write(render_html(board, style="2d"))
 ```
 
 ## Tests

@@ -107,70 +107,244 @@ MODELS: dict[str, dict] = {
 }
 
 ACTOR_WORDS = _words({
-    "person": "man woman person stranger traveler traveller farmer fisherman doctor "
-              "teacher student mother father mom dad friend brother sister hunter "
-              "merchant thief hero heroine neighbor neighbour villager explorer sailor "
-              "captain musician painter artist baker writer scientist engineer worker "
-              "pilot grandmother grandfather grandma grandpa husband wife uncle aunt "
-              "lady gentleman shepherd monk priest nurse inventor gardener woodcutter "
-              "miller tailor messenger servant maid cook poet",
-    "child": "child kid boy girl baby son daughter toddler orphan",
-    "king": "king emperor prince lord sultan",
-    "queen": "queen empress princess",
-    "wizard": "wizard sorcerer mage magician",
-    "witch": "witch sorceress",
-    "knight": "knight soldier warrior guard guardian samurai",
-    "pirate": "pirate bandit ninja",
-    "astronaut": "astronaut cosmonaut",
-    "alien": "alien martian",
-    "giant": "giant ogre troll",
-    "monster": "monster beast creature demon goblin",
-    "ghost": "ghost spirit phantom",
-    "fairy": "fairy pixie angel",
-    "monkey": "monkey ape gorilla chimpanzee",
-    "robot": "robot android droid",
-    "dog": "dog puppy hound",
-    "cat": "cat kitten",
-    "horse": "horse pony stallion mare donkey mule",
-    "unicorn": "unicorn",
-    "fox": "fox",
-    "wolf": "wolf coyote",
-    "bear": "bear",
-    "rabbit": "rabbit bunny hare",
-    "deer": "deer stag fawn reindeer moose",
-    "sheep": "sheep lamb goat",
-    "cow": "cow bull ox cattle calf buffalo",
-    "pig": "pig piglet boar",
-    "lion": "lion lioness",
-    "tiger": "tiger leopard panther cheetah jaguar",
-    "elephant": "elephant mammoth rhino hippo",
-    "mouse": "mouse rat squirrel hamster hedgehog",
-    "camel": "camel",
-    "turtle": "turtle tortoise frog toad lizard crab snail",
-    "dinosaur": "dinosaur",
-    "dragon": "dragon",
-    "bird": "bird sparrow robin dove pigeon swallow seagull gull parrot duck goose "
-            "swan chicken hen rooster songbird",
-    "owl": "owl",
-    "crow": "crow raven",
-    "eagle": "eagle hawk falcon vulture",
-    "butterfly": "butterfly bee moth dragonfly firefly",
-    "bat": "bat",
-    "penguin": "penguin",
-    "fish": "fish salmon trout goldfish",
-    "shark": "shark",
-    "dolphin": "dolphin",
-    "whale": "whale",
-    "boat": "boat ship sailboat canoe raft vessel yacht ferry",
-    "car": "car truck bus taxi van jeep wagon cart carriage",
-    "rocket": "rocket spaceship spacecraft shuttle starship",
-    "plane": "plane airplane aeroplane aircraft jet",
+    "person":
+        "man woman person stranger traveler traveller farmer fisherman doctor "
+        "teacher student mother father mom dad mum mama papa parent friend "
+        "brother sister sibling cousin hunter merchant thief hero heroine "
+        "neighbor neighbour villager explorer sailor captain musician painter "
+        "artist baker writer author scientist engineer worker pilot grandmother "
+        "grandfather grandma grandpa grandparent husband wife uncle aunt lady "
+        "gentleman cowboy shepherd nurse inventor gardener woodcutter "
+        "lumberjack miller tailor messenger servant maid poet singer "
+        "dancer actor actress athlete runner swimmer climber hiker camper "
+        "tourist visitor guest customer shopkeeper vendor trader seller builder "
+        "carpenter blacksmith smith miner driver rider passenger pedestrian "
+        "citizen townsman peasant nomad pilgrim wanderer adventurer detective "
+        "spy journalist reporter photographer lawyer mayor president "
+        "leader chief boss manager clerk secretary officer programmer coder "
+        "designer architect professor scholar librarian historian philosopher "
+        "scientist astronomer biologist chemist mathematician beggar refugee "
+        "prisoner slave rebel villain bully stranger crowd human adult teenager "
+        "teen youth elder lover couple partner girlfriend boyfriend fiance "
+        "bride groom widow twin companion ally rival enemy opponent "
+        "foe ranger lifeguard fireman firefighter postman mailman "
+        "waiter waitress barber butcher jeweler potter weaver sculptor "
+        "conductor drummer guitarist pianist violinist apprentice mentor "
+        "pupil classmate colleague coworker teammate player referee "
+        "champion somebody someone nobody anyone guy dude chap bloke gal "
+        "maiden lad lass fisher boatman ferryman oarsman dweller inhabitant "
+        "resident settler pioneer",
+    "child":
+        "child kid boy girl baby son daughter toddler orphan infant schoolboy "
+        "schoolgirl youngster newborn grandchild grandson granddaughter nephew "
+        "niece",
+    "king":
+        "king emperor prince lord sultan pharaoh monarch ruler duke baron tsar "
+        "czar chieftain",
+    "queen":
+        "queen empress princess duchess",
+    "wizard":
+        "wizard sorcerer mage magician warlock enchanter alchemist druid shaman "
+        "prophet oracle seer sage",
+    "witch":
+        "witch sorceress enchantress hag crone",
+    "knight":
+        "knight soldier warrior guard guardian samurai gladiator paladin sentry "
+        "trooper marine general commander sergeant swordsman archer viking "
+        "spartan legionnaire",
+    "pirate":
+        "pirate bandit ninja robber burglar outlaw smuggler assassin buccaneer "
+        "raider mercenary",
+    "astronaut":
+        "astronaut cosmonaut spaceman",
+    "alien":
+        "alien martian extraterrestrial",
+    "giant":
+        "giant ogre troll titan cyclops colossus",
+    "monster":
+        "monster beast creature demon goblin orc fiend werewolf yeti bigfoot "
+        "kraken ghoul",
+    "ghost":
+        "ghost spirit phantom specter spectre wraith apparition poltergeist "
+        "",
+    "fairy":
+        "fairy pixie sprite nymph faerie",
+    "angel":
+        "angel cherub seraph",
+    "monkey":
+        "monkey ape gorilla chimpanzee chimp baboon orangutan lemur",
+    "robot":
+        "robot android droid cyborg automaton bot ",
+    "vampire":
+        "vampire dracula",
+    "zombie":
+        "zombie undead mummy",
+    "skeleton":
+        "skeleton",
+    "santa":
+        "santa",
+    "elf":
+        "elf leprechaun gnome imp",
+    "dwarf":
+        "dwarf hobbit halfling",
+    "clown":
+        "clown jester juggler acrobat mime",
+    "mermaid":
+        "mermaid merman siren",
+    "chef":
+        "chef",
+    "police":
+        "police policeman policewoman cop sheriff constable",
+    "priest":
+        "priest monk nun bishop pope cleric friar rabbi imam pastor vicar",
+    "devil":
+        "devil satan",
+    "superhero":
+        "superhero",
+    "scarecrow":
+        "scarecrow",
+    "dog":
+        "dog puppy hound bulldog pup terrier poodle retriever spaniel collie "
+        "mutt beagle husky corgi labrador dachshund",
+    "cat":
+        "cat kitten kitty tomcat feline tabby",
+    "horse":
+        "horse pony stallion mare foal colt steed",
+    "donkey":
+        "donkey mule burro",
+    "zebra":
+        "zebra",
+    "unicorn":
+        "unicorn",
+    "pegasus":
+        "pegasus",
+    "fox":
+        "fox vixen jackal",
+    "wolf":
+        "wolf coyote hyena",
+    "bear":
+        "bear grizzly",
+    "panda":
+        "panda",
+    "rabbit":
+        "rabbit bunny hare",
+    "kangaroo":
+        "kangaroo wallaby",
+    "deer":
+        "deer stag fawn reindeer moose elk antelope gazelle",
+    "sheep":
+        "sheep lamb ewe",
+    "goat":
+        "goat ram",
+    "llama":
+        "llama alpaca",
+    "cow":
+        "cow bull ox cattle calf buffalo bison yak",
+    "pig":
+        "pig piglet boar hog swine",
+    "lion":
+        "lion lioness",
+    "griffin":
+        "griffin gryphon sphinx chimera",
+    "tiger":
+        "tiger leopard panther cheetah jaguar cougar puma lynx bobcat",
+    "elephant":
+        "elephant mammoth",
+    "rhino":
+        "rhino rhinoceros hippo hippopotamus",
+    "giraffe":
+        "giraffe",
+    "mouse":
+        "mouse rat hamster hedgehog mole gerbil shrew vole",
+    "squirrel":
+        "squirrel chipmunk raccoon skunk beaver otter weasel ferret badger "
+        "mongoose meerkat possum",
+    "camel":
+        "camel",
+    "turtle":
+        "turtle tortoise snail armadillo",
+    "frog":
+        "frog toad",
+    "crocodile":
+        "crocodile alligator lizard iguana gecko chameleon salamander newt "
+        "snake serpent python cobra viper",
+    "crab":
+        "crab lobster scorpion spider beetle ant bug insect ladybug cricket "
+        "grasshopper caterpillar",
+    "dinosaur":
+        "dinosaur tyrannosaurus raptor brontosaurus",
+    "dragon":
+        "dragon wyvern drake hydra",
+    "bird":
+        "bird sparrow robin dove pigeon swallow songbird finch bluebird lark "
+        "nightingale starling wren jay bluejay canary thrush",
+    "seagull":
+        "seagull gull albatross pelican tern stork heron egret",
+    "duck":
+        "duck duckling goose gosling",
+    "swan":
+        "swan",
+    "chicken":
+        "chicken hen rooster turkey chick",
+    "parrot":
+        "parrot macaw toucan cockatoo parakeet",
+    "flamingo":
+        "flamingo",
+    "peacock":
+        "peacock",
+    "phoenix":
+        "phoenix firebird",
+    "owl":
+        "owl",
+    "crow":
+        "crow raven magpie blackbird",
+    "eagle":
+        "eagle hawk falcon vulture condor osprey",
+    "butterfly":
+        "butterfly moth dragonfly firefly",
+    "bee":
+        "bee wasp hornet bumblebee hummingbird",
+    "bat":
+        "bat",
+    "penguin":
+        "penguin puffin",
+    "fish":
+        "fish salmon trout goldfish tuna cod carp minnow sardine herring eel "
+        "piranha clownfish",
+    "shark":
+        "shark barracuda swordfish",
+    "dolphin":
+        "dolphin porpoise seal walrus",
+    "whale":
+        "whale orca leviathan",
+    "octopus":
+        "octopus squid jellyfish",
+    "submarine":
+        "submarine",
+    "boat":
+        "boat ship sailboat canoe raft vessel yacht ferry kayak rowboat dinghy "
+        "galleon schooner steamer tugboat barge gondola liner frigate lifeboat",
+    "car":
+        "car truck bus taxi van jeep wagon cart carriage automobile cab "
+        "limousine pickup tractor train tram locomotive coach chariot "
+        "stagecoach ambulance sedan motorcar",
+    "rocket":
+        "rocket spaceship spacecraft shuttle starship missile",
+    "ufo":
+        "ufo saucer",
+    "plane":
+        "plane airplane aeroplane aircraft jet helicopter airliner biplane "
+        "glider chopper",
+    "balloon":
+        "balloon blimp airship zeppelin",
 })
 
 # word -> (kind, how many to draw)
 COLLECTIVES: dict[str, tuple[str, int]] = {
     "people": ("person", 4), "crowd": ("person", 5), "family": ("person", 3),
-    "villagers": ("person", 4), "everyone": ("person", 4), "everybody": ("person", 4),
+    "villagers": ("person", 5), "townsfolk": ("person", 5), "folk": ("person", 4),
+    "folks": ("person", 4), "citizens": ("person", 5), "audience": ("person", 5),
+    "guests": ("person", 4), "neighbors": ("person", 4), "neighbours": ("person", 4), "everyone": ("person", 4), "everybody": ("person", 4),
     "army": ("knight", 5), "soldiers": ("knight", 4), "children": ("child", 3),
     "flock": ("bird", 5), "herd": ("cow", 4), "pack": ("wolf", 4), "fleet": ("boat", 3),
     "crew": ("person", 4), "team": ("person", 4), "tribe": ("person", 5),
@@ -195,86 +369,289 @@ PROPS: dict[str, dict] = {
 }
 
 PROP_WORDS = _words({
-    "house": "house cottage hut cabin school shop store church barn inn tavern "
-             "library temple farmhouse bakery mill",
-    "castle": "castle palace fortress citadel",
-    "tower": "tower lighthouse beacon",
-    "tent": "tent camp campsite",
-    "campfire": "fire campfire bonfire flame",
-    "chest": "treasure chest gold box",
-    "crystal": "crystal gem diamond jewel ruby emerald orb",
-    "lamp": "lamp lantern lamppost streetlight candle",
-    "tree": "tree oak pine willow",
-    "rock": "rock stone boulder cave",
-    "flower": "flower roses tulip daisy blossom bloom",
-    "cactus": "cactus",
+    "house":
+        "house cottage hut cabin school shop store church barn inn tavern "
+        "library temple farmhouse bakery mill mansion villa bungalow lodge "
+        "shack shed hostel hotel motel pub cafe restaurant diner bookstore "
+        "pharmacy hospital clinic museum theater theatre cinema stable workshop "
+        "forge smithy chapel cathedral monastery mosque orphanage dormitory "
+        "townhall homestead cottage schoolhouse boathouse greenhouse storehouse "
+        "warehouse garage bungalow dwelling residence abode hovel lodge saloon",
+    "castle":
+        "castle palace fortress citadel kingdom stronghold throne fort",
+    "tower":
+        "tower lighthouse beacon turret spire steeple minaret watchtower "
+        "belltower",
+    "tent":
+        "tent camp campsite teepee tipi yurt pavilion marquee campground",
+    "campfire":
+        "fire campfire bonfire flame blaze embers hearth fireplace firewood "
+        "inferno",
+    "chest":
+        "treasure chest gold box coffer loot coins riches suitcase "
+        "luggage gift parcel package",
+    "crystal":
+        "crystal gem diamond jewel ruby emerald orb gemstone sapphire amethyst "
+        "pearl opal relic artifact amulet talisman prism portal",
+    "lamp":
+        "lamp lantern lamppost streetlight candle torch streetlamp lightbulb",
+    "tree":
+        "tree oak pine willow birch maple cedar palm spruce elm redwood sapling "
+        "stump",
+    "rock":
+        "rock stone boulder cave pebble meteorite rubble cavern grotto",
+    "flower":
+        "flower roses tulip daisy blossom bloom lily orchid sunflower poppy "
+        "lavender daffodil petal bouquet wildflower lotus",
+    "cactus":
+        "cactus",
+    "bridge":
+        "bridge footbridge drawbridge overpass viaduct",
+    "fence":
+        "fence gate railing palisade barricade",
+    "well":
+        "wishing bucket",
+    "statue":
+        "statue monument sculpture idol memorial obelisk ruins pillar totem",
+    "windmill":
+        "windmill turbine",
+    "bench":
+        "bench chair stool sofa couch armchair",
+    "fountain":
+        "fountain geyser",
+    "grave":
+        "grave tomb tombstone gravestone headstone coffin crypt",
+    "snowman":
+        "snowman",
+    "table":
+        "table desk picnic feast banquet altar dinner supper lunch breakfast "
+        "meal",
+    "flag":
+        "flag banner pennant bunting flagpole",
+    "barrel":
+        "barrel crate keg cask cargo",
+    "mushroom":
+        "mushroom toadstool fungus",
+    "stall":
+        "stall booth kiosk",
+    "pyramid":
+        "pyramid ziggurat",
+    "igloo":
+        "igloo",
+    "bush":
+        "bush shrub hedge bramble",
+    "signpost":
+        "signpost billboard crossroads",
+    "pumpkin":
+        "pumpkin melon",
 })
 
 # --------------------------------------------------------------------------
 # World
 # --------------------------------------------------------------------------
 SETTING_WORDS = _words({
-    "forest": "forest woods jungle grove rainforest woodland",
-    "ocean": "ocean sea beach shore island coast harbor harbour bay seaside",
-    "lake": "lake pond river stream creek waterfall swamp marsh",
-    "city": "city street skyscraper downtown metropolis subway apartment traffic "
-            "sidewalk avenue",
-    "village": "village town hamlet market farm",
-    "desert": "desert dune oasis canyon",
-    "mountain": "mountain peak summit cliff hill valley volcano",
-    "snow": "arctic tundra glacier iceberg winter",
-    "space": "space planet galaxy universe cosmos asteroid mars",
-    "meadow": "meadow field garden park prairie countryside pasture",
+    "forest":
+        "forest woods jungle grove rainforest woodland timberland bamboo "
+        "wilderness backwoods canopy wildwood treeline",
+    "ocean":
+        "ocean sea beach shore island coast harbor harbour bay seaside seashore "
+        "shoreline coastline waterfront oceanside seafront lagoon reef pier "
+        "dock cove gulf strait atoll archipelago marina wharf jetty boardwalk "
+        "cape port isle",
+    "lake":
+        "lake pond river stream creek waterfall swamp marsh brook riverbank "
+        "lakeside lakeshore reservoir canal bayou wetland rapids delta estuary "
+        "fjord loch moat bog riverside",
+    "city":
+        "city street skyscraper downtown metropolis subway apartment traffic "
+        "sidewalk avenue cityscape urban alley boulevard mall highway freeway "
+        "intersection airport factory paris london tokyo rome berlin chicago "
+        "manhattan brooklyn shanghai mumbai dubai sydney toronto boston seattle "
+        "rooftop",
+    "village":
+        "village town hamlet market farm township settlement ranch farmstead "
+        "farmyard barnyard bazaar fairground marketplace parish outpost colony "
+        "neighborhood neighbourhood suburb plaza",
+    "desert":
+        "desert dune oasis canyon sahara wasteland badlands mesa savanna "
+        "savannah outback gobi mojave safari",
+    "mountain":
+        "mountain peak summit cliff hill valley volcano alps himalaya everest "
+        "highland crag plateau gorge ravine foothill hillside hilltop "
+        "mountaintop mountainside glen rockies andes",
+    "snow":
+        "arctic tundra glacier iceberg winter antarctica antarctic siberia "
+        "icecap snowfield permafrost alaska greenland wintertime",
+    "space":
+        "space planet galaxy universe cosmos asteroid mars nebula lunar jupiter "
+        "saturn venus neptune pluto constellation interstellar comet meteor "
+        "spaceport moonbase",
+    "meadow":
+        "meadow field garden park prairie countryside pasture grassland lawn "
+        "yard backyard courtyard playground orchard vineyard farmland "
+        "steppe heath moor glade clearing paddock cemetery graveyard",
 })
 WATER_SETTINGS = {"ocean", "lake"}
 
+# Weak clues: they pick the place only when the text never names one.
+HINT_WORDS = _words({
+    "ocean": "waves tide surf seashell seagull gull sailor sail anchor salty mermaid",
+    "forest": "leaf branch moss mushroom undergrowth thicket",
+    "city": "neon office pavement crowd skyline",
+    "snow": "ice icy frozen sled igloo",
+    "space": "orbit rocket spaceship stars",
+    "village": "townspeople townsfolk villager festival fair",
+    "desert": "sand scorching mirage",
+    "mountain": "climb ridge slope",
+})
+
+# When a sentence names two places ("a village by the sea"), the second one
+# is kept as scenery inside the first.
+SETTING_PROPS = {"village": "house", "forest": "tree", "desert": "cactus",
+                 "meadow": "flower", "city": "lamp"}
+
+# ---- creative liberty: life and set dressing the text did not ask for ------
+# setting -> [(kind, action, how many)]
+AMBIENT: dict[str, list[tuple[str, str, int]]] = {
+    "ocean": [("boat", "walk", 1), ("bird", "fly", 3), ("dolphin", "swim", 2),
+              ("person", "walk", 1), ("whale", "swim", 1), ("child", "dance", 2)],
+    "lake": [("boat", "walk", 1), ("bird", "fly", 3), ("fish", "swim", 3),
+             ("deer", "idle", 1), ("person", "look", 1)],
+    "forest": [("deer", "walk", 2), ("bird", "fly", 3), ("fox", "walk", 1),
+               ("rabbit", "jump", 2), ("bear", "walk", 1), ("butterfly", "fly", 4)],
+    "meadow": [("butterfly", "fly", 4), ("rabbit", "jump", 2), ("sheep", "idle", 3),
+               ("bird", "fly", 3), ("horse", "walk", 1), ("child", "dance", 2)],
+    "village": [("person", "walk", 2), ("child", "dance", 2), ("dog", "walk", 1),
+                ("cat", "idle", 1), ("bird", "fly", 3), ("sheep", "idle", 3)],
+    "city": [("car", "run", 2), ("person", "walk", 3), ("bird", "fly", 3),
+             ("dog", "walk", 1), ("plane", "fly", 1)],
+    "desert": [("camel", "walk", 2), ("eagle", "fly", 1), ("turtle", "walk", 1)],
+    "mountain": [("eagle", "fly", 1), ("deer", "idle", 2), ("sheep", "idle", 3),
+                 ("person", "walk", 1)],
+    "snow": [("penguin", "idle", 4), ("wolf", "walk", 2), ("deer", "walk", 2),
+             ("person", "walk", 1)],
+    "space": [("rocket", "fly", 1), ("astronaut", "jump", 1), ("alien", "dance", 2),
+              ("robot", "walk", 1)],
+}
+NIGHT_SWAP = {"bird": "owl", "butterfly": "bat", "eagle": "owl"}
+AMBIENT_PROPS = {
+    "ocean": ["tower", "tent", "chest"], "lake": ["tent", "house", "flower"],
+    "forest": ["tent", "rock", "crystal"], "meadow": ["flower", "tree", "house"],
+    "village": ["lamp", "flower"], "city": ["lamp"], "desert": ["cactus", "tent", "rock"],
+    "mountain": ["tent", "castle", "rock"], "snow": ["tent", "house"],
+    "space": ["crystal", "rock"],
+}
+FREE_SETTINGS = ["meadow", "forest", "village", "mountain"]
+MOOD_WEATHER = {"sad": "rain", "mysterious": "fog", "tense": "storm"}
+
 TIME_WORDS = _words({
-    "night": "night midnight moon moonlight moonlit star starlight starry nightfall",
-    "sunset": "evening dusk sunset twilight",
-    "dawn": "morning dawn sunrise daybreak",
-    "day": "day noon afternoon sun sunny sunlight sunshine daylight",
+    "night":
+        "night midnight moon moonlight moonlit star starlight starry nightfall "
+        "tonight nighttime nocturnal bedtime",
+    "sunset":
+        "evening dusk sunset twilight sundown gloaming afterglow",
+    "dawn":
+        "morning dawn sunrise daybreak",
+    "day":
+        "day noon afternoon sun sunny sunlight sunshine daylight daytime midday",
 })
 
 WEATHER_WORDS = _words({
-    "rain": "rain rainy drizzle downpour raindrop",
-    "storm": "storm thunder lightning tempest hurricane thunderstorm",
-    "snow": "snow snowy blizzard snowflake frost snowfall",
-    "fog": "fog mist haze foggy misty",
-    "clear": "sunny sunshine cloudless",
+    "rain":
+        "rain rainy drizzle downpour raindrop shower monsoon drenched soaked "
+        "sleet hail puddle",
+    "storm":
+        "storm thunder lightning tempest hurricane thunderstorm gale squall "
+        "cyclone typhoon tornado stormy",
+    "snow":
+        "snow snowy blizzard snowflake frost snowfall flurry frosty wintry "
+        "snowstorm",
+    "fog":
+        "fog mist haze foggy misty smog murky hazy cloudy overcast gloomy",
+    "clear":
+        "sunny sunshine cloudless",
 })
 
 ACTION_WORDS = _words({
-    "walk": "walk go wander stroll travel journey march hike follow come return "
-            "leave arrive enter approach explore cross roam trek move carry lead "
-            "creep sneak sail drive ride set",
-    "run": "run race rush chase flee hurry dash sprint escape charge gallop bolt",
-    "fly": "fly soar glide float hover ascend swoop flutter launch",
-    "jump": "jump leap hop bounce cheer celebrate",
-    "dance": "dance spin twirl sing play laugh",
-    "swim": "swim dive paddle splash",
-    "sleep": "sleep rest dream nap doze snore",
-    "fall": "fall collapse tumble trip stumble faint die",
-    "talk": "talk say speak tell ask whisper shout argue reply answer greet meet "
-            "call explain discuss chat promise agree",
-    "fight": "fight battle attack strike struggle wrestle duel defeat slay",
-    "look": "look search watch see find discover stare gaze notice seek spot",
-    "idle": "sit wait stand stay kneel think read pray listen",
+    "walk":
+        "walk go wander stroll travel journey march hike follow come return "
+        "leave arrive enter approach explore cross roam trek move carry lead "
+        "creep sneak sail drive ride set amble trudge plod stride pace patrol "
+        "parade proceed advance depart wade trail accompany visit tour migrate "
+        "commute deliver bring fetch push pull drag haul guide escort shuffle "
+        "tiptoe limp crawl climb descend pass row voyage venture",
+    "run":
+        "run race rush chase flee hurry dash sprint escape charge gallop bolt "
+        "scurry scamper dart zoom hasten stampede pursue trot jog scramble "
+        "retreat",
+    "fly":
+        "fly soar glide float hover ascend swoop flutter launch flap levitate",
+    "jump":
+        "jump leap hop bounce cheer celebrate bound pounce vault rejoice "
+        "applaud clap",
+    "dance":
+        "dance spin twirl sing play laugh sway waltz frolic prance skip revel "
+        "party perform juggle giggle hum whistle",
+    "swim":
+        "swim dive paddle splash surf snorkel bathe",
+    "sleep":
+        "sleep rest dream nap doze snore slumber snooze hibernate relax lounge",
+    "fall":
+        "fall collapse tumble trip stumble faint die slip topple plunge sink "
+        "crash perish swoon",
+    "talk":
+        "talk say speak tell ask whisper shout argue reply answer greet meet "
+        "call explain discuss chat promise agree chatter mutter murmur yell "
+        "announce declare proclaim preach lecture teach negotiate bargain "
+        "gossip joke beg plead complain confess warn thank welcome introduce "
+        "converse debate scold command",
+    "fight":
+        "fight battle attack strike struggle wrestle duel defeat slay clash "
+        "punch kick stab slash shoot bite claw ambush raid invade conquer "
+        "quarrel brawl spar",
+    "look":
+        "look search watch see find discover stare gaze notice seek spot peer "
+        "glance observe examine inspect admire spy scan behold glimpse peek "
+        "marvel",
+    "wave":
+        "wave salute beckon",
+    "work":
+        "work build dig chop hammer plant harvest cook bake sew paint repair "
+        "fix forge carve craft sweep stir knead plow plough sow reap",
+    "idle":
+        "sit wait stand stay kneel think read pray listen ponder meditate "
+        "linger pause hesitate hide crouch guard eat drink write study learn "
+        "mourn weep sob smile nod ",
 })
-VEHICLES = {"boat", "car", "rocket", "plane"}
-PHYSICAL_ACTIONS = {"walk", "run", "fly", "jump", "dance", "swim", "sleep", "fall", "fight"}
+VEHICLES = {"boat", "car", "rocket", "plane", "balloon", "ufo"}
+PHYSICAL_ACTIONS = {"walk", "run", "fly", "jump", "dance", "swim", "sleep", "fall", "fight",
+                    "wave", "work"}
 
 MOOD_WORDS = _words({
-    "joyful": "happy joy laugh smile love beautiful wonderful bright celebrate delight "
-              "glad cheer warm hope fun sing dance golden victory merry proud",
-    "sad": "sad cry weep tear lonely alone lost grief sorrow mourn death die dead "
-           "empty farewell goodbye broken pain hurt miss",
-    "tense": "fear afraid danger scream chase monster fight battle war attack terror "
-             "panic suddenly escape threat angry rage enemy trap roar storm flee",
-    "mysterious": "mystery mysterious strange secret magic magical ancient whisper "
-                  "shadow hidden unknown dream ghost enchanted curious wonder mist "
-                  "spell eerie",
-    "calm": "calm quiet peace peaceful gentle soft still slow rest sleep serene "
-            "breeze tranquil",
+    "joyful":
+        "happy joy laugh smile love beautiful wonderful bright celebrate "
+        "delight glad cheer warm hope fun sing dance golden victory merry proud "
+        "joyful cheerful festive celebration party triumph bliss thrilled "
+        "excited grateful lovely playful jolly radiant glorious hooray wedding "
+        "birthday festival carnival feast",
+    "sad":
+        "sad cry weep tear lonely alone lost grief sorrow mourn death die dead "
+        "empty farewell goodbye broken pain hurt miss gloomy miserable "
+        "heartbroken despair regret tragic funeral abandoned forgotten "
+        "melancholy weary",
+    "tense":
+        "fear afraid danger scream chase monster fight battle war attack terror "
+        "panic suddenly escape threat angry rage enemy trap roar storm flee "
+        "dangerous deadly furious horror nightmare doom chaos violent desperate "
+        "urgent alarm ambush siege",
+    "mysterious":
+        "mystery mysterious strange secret magic magical ancient whisper shadow "
+        "hidden unknown dream ghost enchanted curious wonder mist spell eerie "
+        "haunted riddle prophecy legend myth cursed forbidden arcane mystical "
+        "uncanny otherworldly",
+    "calm":
+        "calm quiet peace peaceful gentle soft still slow rest sleep serene "
+        "breeze tranquil soothing relaxed lazy silent hush mild",
 })
 
 IRREGULAR = {
@@ -295,7 +672,10 @@ IRREGULAR_PLURALS = {"wolves", "men", "women", "mice", "geese", "fairies", "catt
 # Words that look like a vocabulary hit after stemming but are not.
 IGNORE = {"hoped", "hoping", "hope's", "was", "has", "his", "its", "this", "as", "us",
           "does", "goes", "going", "set", "bass", "boxing", "moved", "still", "left",
-          "like", "liked", "can", "may", "might", "will", "well", "back", "even"}
+          "like", "liked", "can", "may", "might", "will", "well", "back", "even",
+          "passed", "past", "kind", "present", "second", "fine", "being"}
+# Words that must not be read as two drawable halves ("sea" + "sons").
+NOT_COMPOUND = {"season", "seasons", "seasonal", "seasoned", "carpet", "carpets"}
 
 NUMBERS = {"two": 2, "three": 3, "four": 4, "five": 5, "six": 5, "seven": 5,
            "several": 4, "many": 5, "few": 3, "both": 2, "couple": 2, "dozen": 5,
@@ -325,3 +705,127 @@ every everything anything today tomorrow yesterday monday tuesday wednesday thur
 friday saturday sunday january february march april june july august september
 october november december mr mrs ms dr sir oh ah hello yes okay
 """.split())
+
+
+# --------------------------------------------------------------------------
+# Extended cast, props and place dressing
+# --------------------------------------------------------------------------
+MODELS.update({
+    "angel": {"base": "person", "robe": True, "color": "#fbfbf5", "default": "fly"},
+    "vampire": {"base": "person", "robe": True, "color": "#1b1420", "skin": "#e6e1ea"},
+    "zombie": {"base": "person", "color": "#5b6b4a", "skin": "#9bbf8a"},
+    "skeleton": {"base": "person", "color": "#e8e6df", "skin": "#f4f2ea"},
+    "santa": {"base": "person", "hat": True, "robe": True, "color": "#c62828"},
+    "elf": {"base": "person", "hat": True, "scale": 0.6, "color": "#2e8b57"},
+    "dwarf": {"base": "person", "scale": 0.62, "color": "#7a4a2a"},
+    "clown": {"base": "person", "bigHead": True, "color": "#ff5fa2", "default": "dance"},
+    "mermaid": {"base": "person", "robe": True, "color": "#2aa198", "default": "swim",
+                "water": True, "implies": "ocean"},
+    "chef": {"base": "person", "hat": True, "color": "#f5f5f5", "default": "work"},
+    "police": {"base": "person", "color": "#1f3a6e"},
+    "priest": {"base": "person", "robe": True, "color": "#5a4632"},
+    "devil": {"base": "person", "color": "#b71c1c", "skin": "#e0483a"},
+    "superhero": {"base": "person", "color": "#d32f2f", "default": "fly"},
+    "scarecrow": {"base": "person", "hat": True, "color": "#b58a3c", "skin": "#e3c887"},
+    "donkey": {"base": "quad", "color": "#8d8d8d", "len": 1.3, "leg": 0.7, "width": 0.45,
+               "neck": 0.35, "ears": "long", "tail": 0.5},
+    "zebra": {"base": "quad", "color": "#e9e9ee", "len": 1.6, "leg": 0.9, "width": 0.5,
+              "neck": 0.5, "ears": "up", "tail": 0.6},
+    "pegasus": {"base": "quad", "color": "#f7f7fb", "len": 1.7, "leg": 0.95, "width": 0.55,
+                "neck": 0.55, "ears": "up", "tail": 0.7, "wings": True, "default": "fly"},
+    "griffin": {"base": "quad", "color": "#c79a3e", "len": 1.5, "leg": 0.6, "width": 0.55,
+                "ears": "up", "tail": 0.8, "wings": True, "default": "fly"},
+    "panda": {"base": "quad", "color": "#f4f4f4", "len": 1.3, "leg": 0.45, "width": 0.75,
+              "ears": "round", "tail": 0.1},
+    "kangaroo": {"base": "quad", "color": "#b98452", "len": 0.8, "leg": 0.7, "width": 0.35,
+                 "neck": 0.3, "ears": "long", "tail": 0.9, "default": "jump"},
+    "goat": {"base": "quad", "color": "#d9d2c3", "len": 0.9, "leg": 0.45, "width": 0.4,
+             "ears": "round", "tail": 0.12, "horn": True},
+    "llama": {"base": "quad", "color": "#f0e6d2", "len": 1.2, "leg": 0.8, "width": 0.5,
+              "neck": 0.8, "ears": "up", "tail": 0.15},
+    "rhino": {"base": "quad", "color": "#7f858c", "len": 2.0, "leg": 0.7, "width": 1.0,
+              "ears": "round", "tail": 0.3, "horn": True},
+    "giraffe": {"base": "quad", "color": "#e0b24a", "len": 1.5, "leg": 1.6, "width": 0.55,
+                "neck": 1.7, "ears": "round", "tail": 0.6},
+    "squirrel": {"base": "quad", "color": "#b5651d", "len": 0.35, "leg": 0.12, "width": 0.2,
+                 "ears": "up", "tail": 0.5},
+    "frog": {"base": "quad", "color": "#4caf50", "len": 0.3, "leg": 0.1, "width": 0.28,
+             "tail": 0.05, "default": "jump"},
+    "crocodile": {"base": "quad", "color": "#4d7a3a", "len": 2.4, "leg": 0.16, "width": 0.5,
+                  "tail": 1.5, "speed": 0.6},
+    "crab": {"base": "quad", "color": "#d84a2f", "len": 0.3, "leg": 0.1, "width": 0.4,
+             "tail": 0.05, "speed": 0.5},
+    "seagull": {"base": "bird", "color": "#f2f2f2", "scale": 1.2, "default": "fly"},
+    "duck": {"base": "bird", "color": "#c9a24a"},
+    "swan": {"base": "bird", "color": "#fafafa", "scale": 1.6},
+    "chicken": {"base": "bird", "color": "#f1e9d8", "scale": 1.1},
+    "parrot": {"base": "bird", "color": "#2eaf4f", "scale": 1.1, "default": "fly"},
+    "flamingo": {"base": "bird", "color": "#ff8fb1", "scale": 1.7},
+    "peacock": {"base": "bird", "color": "#1c8f9e", "scale": 1.6},
+    "phoenix": {"base": "bird", "color": "#ff6a1a", "scale": 2.4, "default": "fly"},
+    "bee": {"base": "bird", "color": "#f4c20d", "scale": 0.3, "default": "fly"},
+    "octopus": {"base": "fish", "color": "#9c4fb5", "scale": 1.6, "default": "swim",
+                "water": True, "implies": "ocean"},
+    "submarine": {"base": "fish", "color": "#f2c230", "scale": 4.0, "default": "swim",
+                  "water": True, "implies": "ocean"},
+    "ufo": {"base": "ufo", "default": "fly"},
+    "balloon": {"base": "balloon", "default": "fly"},
+})
+
+PROPS.update({
+    "bridge": {"base": "bridge", "r": 7},
+    "fence": {"base": "fence", "r": 5},
+    "well": {"base": "well", "r": 5},
+    "statue": {"base": "statue", "r": 6},
+    "windmill": {"base": "windmill", "r": 13},
+    "bench": {"base": "bench", "r": 3.2},
+    "fountain": {"base": "fountain", "r": 6},
+    "grave": {"base": "grave", "r": 4.5},
+    "snowman": {"base": "snowman", "r": 3.5},
+    "table": {"base": "table", "r": 3},
+    "flag": {"base": "flag", "r": 5.5},
+    "barrel": {"base": "barrel", "r": 3.5},
+    "mushroom": {"base": "mushroom", "r": 3.5},
+    "stall": {"base": "stall", "r": 6},
+    "pyramid": {"base": "pyramid", "r": 30, "implies": "desert"},
+    "igloo": {"base": "igloo", "r": 7, "implies": "snow"},
+    "bush": {"base": "bush", "r": 4.5},
+    "signpost": {"base": "signpost", "r": 4},
+    "pumpkin": {"base": "pumpkin", "r": 2.8},
+})
+
+# Words that bring set dressing with them, whatever the place.
+PLACE_DRESSING = {
+    "farm": ["fence", "windmill"], "ranch": ["fence"], "farmyard": ["fence"],
+    "cemetery": ["grave"], "graveyard": ["grave"], "funeral": ["grave"],
+    "market": ["stall"], "bazaar": ["stall"], "marketplace": ["stall", "barrel"],
+    "playground": ["bench"], "park": ["bench", "fountain"], "plaza": ["fountain"],
+    "harbor": ["barrel"], "harbour": ["barrel"], "port": ["barrel"], "dock": ["barrel"],
+    "wharf": ["barrel"], "marina": ["flag"], "garden": ["flower", "fence"],
+    "orchard": ["tree"], "vineyard": ["fence"], "festival": ["flag", "stall"],
+    "fair": ["flag", "stall"], "carnival": ["flag", "stall"], "wedding": ["flag", "table"],
+    "party": ["flag", "table"], "celebration": ["flag"], "birthday": ["table", "flag"],
+    "parade": ["flag"], "halloween": ["pumpkin", "grave"], "christmas": ["snowman", "tree"],
+    "crossroads": ["signpost"], "oasis": ["tree", "well"], "ruins": ["statue", "rock"],
+}
+AMBIENT_PROPS.update({
+    "ocean": ["tower", "tent", "chest", "barrel", "flag"],
+    "lake": ["tent", "house", "flower", "bridge", "bench"],
+    "forest": ["tent", "rock", "crystal", "mushroom", "bush", "signpost"],
+    "meadow": ["flower", "tree", "house", "windmill", "fence", "bench"],
+    "village": ["lamp", "flower", "well", "stall", "fountain", "fence"],
+    "city": ["lamp", "bench", "fountain", "statue"],
+    "desert": ["cactus", "tent", "rock", "pyramid", "well"],
+    "mountain": ["tent", "castle", "rock", "signpost", "flag"],
+    "snow": ["tent", "house", "snowman", "igloo"],
+    "space": ["crystal", "rock", "flag"],
+})
+AMBIENT["ocean"] += [("seagull", "fly", 4), ("crab", "walk", 2)]
+AMBIENT["lake"] += [("duck", "idle", 3), ("swan", "idle", 2), ("frog", "jump", 2)]
+AMBIENT["forest"] += [("squirrel", "run", 2), ("owl", "fly", 1)]
+AMBIENT["village"] += [("chicken", "idle", 3), ("goat", "idle", 2), ("duck", "walk", 2)]
+AMBIENT["meadow"] += [("bee", "fly", 4), ("cow", "idle", 2), ("goat", "idle", 2)]
+AMBIENT["desert"] += [("crocodile", "walk", 1)]
+AMBIENT["mountain"] += [("goat", "idle", 3), ("balloon", "fly", 1)]
+AMBIENT["space"] += [("ufo", "fly", 1)]
+AMBIENT["city"] += [("balloon", "fly", 1)]

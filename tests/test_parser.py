@@ -93,3 +93,69 @@ def test_html_is_self_contained_and_escapes_story_text():
     assert "__STORY_JSON__" not in html and "__VIEWER_JS__" not in html
     assert "</script><b>hi" not in html
     assert "http://" not in html.split("<script type=\"importmap\">")[0]
+
+
+def test_sea_wins_over_other_places_and_town_becomes_scenery():
+    sc = scene("The townspeople celebrate in the village by the sea.")
+    assert sc["setting"] == "ocean"
+    assert "house" in [p["kind"] for p in sc["props"]]
+
+
+def test_compound_and_group_words_mean_several_people():
+    for text in ("The townspeople celebrate.", "The villagers danced.",
+                 "The fishermen sang.", "The townsfolk cheered."):
+        people = [a for a in scene(text)["actors"] if a["kind"] == "person"]
+        assert people and people[0]["count"] >= 3, text
+    assert scene("The townspeople celebrate.")["setting"] == "village"
+    assert not scene("The seasons changed.")["actors"]
+
+
+def test_literal_mode_adds_nothing():
+    sc = scene("Create a scene by the sea.")
+    assert sc["setting"] == "ocean" and not sc["actors"] and not sc["props"]
+
+
+def test_liberty_adds_background_life_but_never_changes_the_place():
+    for take in range(8):
+        sc = build_storyboard("Create a scene by the sea.", liberty=2, variation=take)["scenes"][0]
+        assert sc["setting"] == "ocean"
+        assert sc["actors"] and all(a["ambient"] for a in sc["actors"])
+    takes = {str(build_storyboard("A scene by the sea.", liberty=2, variation=v)["scenes"])
+             for v in range(8)}
+    assert len(takes) > 1
+
+
+def test_liberty_keeps_the_named_cast_and_is_repeatable():
+    text = "A fox ran through the forest at night."
+    a = build_storyboard(text, liberty=2, variation=3)
+    assert a == build_storyboard(text, liberty=2, variation=3)
+    main = [x for x in a["scenes"][0]["actors"] if not x["ambient"]]
+    assert [(x["kind"], x["action"]) for x in main] == [("fox", "run")]
+    assert a["scenes"][0]["time"] == "night"
+
+
+def test_vocabulary_points_at_things_the_viewer_can_draw():
+    import re
+    from pathlib import Path
+    from story3d import lexicon as L
+
+    js = (Path(L.__file__).parent / "static" / "viewer.js").read_text()
+    actor_bases = set(re.search(r"const BUILDERS = \{(.*?)\};", js, re.S).group(1)
+                      .replace(":", " ").replace(",", " ").split())
+    prop_bases = set(re.search(r"const PROP_BUILDERS = \{(.*?)\n  cactus \};", js, re.S)
+                     .group(1).replace(":", " ").replace(",", " ").split()) | {"cactus"}
+    assert {m["base"] for m in L.MODELS.values()} <= actor_bases
+    assert {p["base"] for p in L.PROPS.values()} <= prop_bases
+    assert set(L.ACTOR_WORDS.values()) <= set(L.MODELS)
+    assert set(L.PROP_WORDS.values()) <= set(L.PROPS)
+    assert {k for k, _ in L.COLLECTIVES.values()} <= set(L.MODELS)
+    for options in L.AMBIENT.values():
+        assert {k for k, _, _ in options} <= set(L.MODELS)
+    for kinds in list(L.AMBIENT_PROPS.values()) + list(L.PLACE_DRESSING.values()):
+        assert set(kinds) <= set(L.PROPS)
+
+
+def test_style_is_passed_to_the_viewer():
+    board = build_storyboard("A fox ran.")
+    assert '"style": "2d"' in render_html(board, style="2d")
+    assert '"style": "3d"' in render_html(board)

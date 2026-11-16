@@ -9,6 +9,7 @@ cast) carries over between scenes the way it does for a reader.
 
 from __future__ import annotations
 
+import random
 import re
 import zlib
 from collections import Counter
@@ -42,6 +43,8 @@ def _candidates(word: str):
     yield word, word in L.IRREGULAR_PLURALS
     if word in L.IRREGULAR:
         yield L.IRREGULAR[word], word in L.IRREGULAR_PLURALS
+    if word.endswith("men") and len(word) > 5:
+        yield word[:-3] + "man", True          # fishermen, policemen
     for suffix, repl in _PLURAL_SUFFIXES:
         if word.endswith(suffix) and len(word) - len(suffix) >= 2:
             yield word[: -len(suffix)] + repl, True
@@ -70,6 +73,21 @@ def _known(word: str) -> bool:
         for t in (L.ACTOR_WORDS, L.PROP_WORDS, L.SETTING_WORDS, L.TIME_WORDS,
                   L.WEATHER_WORDS, L.ACTION_WORDS, L.MOOD_WORDS, L.COLLECTIVES)
     )
+
+
+_NOUN_TABLES = (L.ACTOR_WORDS, L.PROP_WORDS, L.SETTING_WORDS, L.TIME_WORDS,
+                L.WEATHER_WORDS, L.COLLECTIVES)
+
+
+def _split_compound(word: str) -> list[str] | None:
+    """"townspeople" -> ["towns", "people"] when both halves are things we can draw."""
+    if len(word) < 7 or word in L.STOPWORDS or word in L.NOT_COMPOUND or _known(word):
+        return None
+    for i in range(3, len(word) - 3):
+        left, right = word[:i], word[i:]
+        if all(any(_find(part, t) for t in _NOUN_TABLES) for part in (left, right)):
+            return [left, right]
+    return None
 
 
 def _tokens(sentence: str) -> list[tuple[str, bool]]:
@@ -150,17 +168,25 @@ class _World:
         self.last_size = 0           # how many of them were in the latest scene
         self.name_kind: dict[str, str] = {}
         self.last_concrete = -99
+        # creative liberty (0 = literal)
+        self.liberty = 0
+        self.rng = random.Random(0)
+        self.default_setting = "meadow"
+        self.weather_in_text = True
 
 
 def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) -> dict:
     toks = [t for c in captions for t in _tokens(c)]
-    words = [w for w, _ in toks]
+    words: list[str] = []
+    for w, _ in toks:
+        parts = None if w.split("'")[0] in names else _split_compound(w.lower())
+        words.extend(parts or [w])
     lows = [w.lower() for w in words]
 
     actors: dict[str, dict] = {}
     props: list[str] = []
     actions: list[tuple[int, str]] = []
-    settings, times, weathers, moods = [], [], [], Counter()
+    settings, hints, times, weathers, moods = [], [], [], [], Counter()
 
     def add_actor(kind: str, pos: int, count: int = 1, name: str | None = None) -> dict:
         key = f"{kind}:{name}" if name else kind
@@ -195,7 +221,8 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
             last_actor = (i, add_actor(kind, i, count))
         elif hit := _find(low, L.ACTOR_WORDS):
             kind, plural = hit
-            count = 3 if plural else 1
+            many = world.rng.randint(3, 5) if world.liberty else 3
+            count = many if plural else 1
             for back in lows[max(0, i - 2): i]:
                 count = L.NUMBERS.get(back, count)
             last_actor = (i, add_actor(kind, i, count))
@@ -203,8 +230,13 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
             if hit[0] not in props:
                 props.append(hit[0])
 
+        for dressing in L.PLACE_DRESSING.get(low, ()):
+            if dressing not in props:
+                props.append(dressing)
         if hit := _find(low, L.SETTING_WORDS):
             settings.append(hit[0])
+        if hit := _find(low, L.HINT_WORDS):
+            hints.append(hit[0])
         if hit := _find(low, L.TIME_WORDS):
             times.append(hit[0])
         if hit := _find(low, L.WEATHER_WORDS):
@@ -268,8 +300,18 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
 
     previous_setting = world.setting
     if settings:
-        world.setting = Counter(settings).most_common(1)[0][0]
+        # Two places in one breath: water wins (so the sea is on screen), then
+        # the last one named; the other becomes scenery.
+        distinct = list(dict.fromkeys(settings))
+        primary = ([s for s in distinct if s in L.WATER_SETTINGS] or distinct)[-1]
+        for other in distinct:
+            dressing = L.SETTING_PROPS.get(other)
+            if other != primary and dressing and dressing not in props:
+                props.append(dressing)
+        world.setting = primary
         world.setting_explicit = True
+    elif hints and not world.setting_explicit:
+        world.setting = hints[-1]
     elif implied and not world.setting_explicit:
         world.setting = implied
     if needs_water and world.setting not in L.WATER_SETTINGS:
@@ -285,7 +327,7 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
     if world.setting == "space":
         world.weather = "clear"
 
-    concrete = bool(cast or props or settings or times or weathers)
+    concrete = bool(cast or props or settings or hints or times or weathers)
     if concrete:
         world.last_concrete = idx
     abstract = not cast and not props and idx - world.last_concrete > 2
@@ -307,53 +349,98 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
     elif idx == 0:
         camera = "crane"
     elif not cast:
-        camera = ("dolly", "crane")[idx % 2]
+        camera = (world.rng.choice(("dolly", "crane", "orbit")) if world.liberty
+                  else ("dolly", "crane")[idx % 2])
     else:
         camera = ("orbit", "dolly", "orbit", "crane")[idx % 4]
+
+    setting = world.setting or world.default_setting
+    weather = world.weather
+    extras: list[dict] = []
+    if world.liberty and not abstract:
+        rng, lib = world.rng, world.liberty
+        moody = L.MOOD_WEATHER.get(mood)
+        if moody and not world.weather_in_text and setting != "space" \
+                and rng.random() < 0.3 * lib:
+            weather = moody
+        taken = {a["kind"] for a in cast}
+        options = [o for o in L.AMBIENT.get(setting, []) if o[0] not in taken]
+        if cast:  # the stage belongs to the cast: only add life in the air or water
+            options = [o for o in options
+                       if o[1] in ("fly", "swim") or L.MODELS[o[0]].get("water")]
+            want = 1 if rng.random() < 0.45 * lib else 0
+        else:
+            want = lib + 1
+        for kind, action, count in rng.sample(options, min(want, len(options))):
+            if world.time == "night":
+                kind = L.NIGHT_SWAP.get(kind, kind)
+            extras.append({"id": f"ambient:{kind}", "kind": kind, "name": None,
+                           "count": count, "action": action, "ambient": True})
+        if not props and rng.random() < 0.45 * lib:
+            pool = list(L.AMBIENT_PROPS.get(setting, []))
+            if world.time == "night" and setting not in ("city", "space"):
+                pool.append("campfire")
+            if pool:
+                props.append(rng.choice(pool))
 
     return {
         "text": " ".join(captions),
         "captions": captions,
         "abstract": abstract,
-        "setting": world.setting or "meadow",
+        "setting": setting,
         "time": world.time,
-        "weather": world.weather,
+        "weather": weather,
         "mood": mood,
         "camera": camera,
         "actors": [
             {"id": a["id"], "kind": a["kind"], "name": a["name"],
              "count": min(a["count"], 5), "action": a["action"],
+             "ambient": bool(a.get("ambient")),
              "model": {k: v for k, v in L.MODELS[a["kind"]].items()
                        if k not in ("default", "implies", "water")}}
-            for a in cast[:6]
+            for a in cast[:6] + extras
         ],
         "props": [{"kind": p, **L.PROPS[p]} for p in props[:5]],
         "keywords": _keywords(words),
     }
 
 
-def build_storyboard(text: str, max_scenes: int = 12, pace: float = 1.0) -> dict:
+def build_storyboard(text: str, max_scenes: int = 12, pace: float = 1.0,
+                     liberty: int = 0, variation: int = 0) -> dict:
     """Parse ``text`` into a storyboard dict ready for ``viewer.render_html``.
 
     max_scenes: longer texts are grouped so the animation has at most this many shots.
     pace:       duration multiplier (2.0 = twice as slow).
+    liberty:    0 stages only what the text says; 1 and 2 let the app add ambient
+                life, set dressing, weather and a time of day the text left open.
+    variation:  a different number gives a different take on the same text.
     """
     text = (text or "").strip()
     sentences = split_sentences(text) if text else []
     names = find_names(sentences)
     world = _World()
+    seed = (zlib.crc32(text.encode("utf-8")) + variation * 9973) & 0xFFFFFF
+    if liberty:
+        every = [w.lower() for s in sentences for w, _ in _tokens(s)]
+        world.liberty = max(0, min(2, int(liberty)))
+        world.rng = random.Random(seed)
+        world.default_setting = world.rng.choice(L.FREE_SETTINGS)
+        world.weather_in_text = any(_find(w, L.WEATHER_WORDS) for w in every)
+        if not any(_find(w, L.TIME_WORDS) for w in every):
+            world.time = world.rng.choice(
+                ["day", "day", "sunset", "dawn"] + (["night"] if world.liberty > 1 else []))
 
     scenes = []
     for idx, captions in enumerate(_chunk(sentences, max(1, max_scenes))):
         scene = _parse_scene(idx, captions, names, world)
-        seconds = sum(min(11.0, max(3.5, len(c.split()) / 2.6)) for c in captions)
+        seconds = sum(min(11.0, max(4.5, len(c.split()) / 2.6)) for c in captions)
         scene["duration"] = round(seconds * pace, 2)
         scenes.append(scene)
 
     title = " ".join(text.split()[:7]) + ("…" if len(text.split()) > 7 else "")
     return {
         "title": title,
-        "seed": zlib.crc32(text.encode("utf-8")) & 0xFFFFFF,
+        "seed": seed,
         "duration": round(sum(s["duration"] for s in scenes), 2),
         "scenes": scenes,
     }

@@ -43,11 +43,19 @@ EXAMPLES = {
 
 st.set_page_config(page_title="Story3D", page_icon="🎬", layout="wide")
 st.title("Story3D")
-st.caption("Turn a story, essay or short text into a 3D animation.")
+st.caption("Turn a story, essay or short text into a 3D or 2D animation.")
 
 with st.sidebar:
     st.header("Settings")
     example = st.selectbox("Start from an example", ["(my own text)", *EXAMPLES])
+    style = st.radio("Style", ["3D", "2D"], horizontal=True,
+                     help="3D: lit low-poly world with a moving camera. "
+                          "2D: flat colours seen side-on, like a paper cut-out.")
+    liberty_name = st.select_slider(
+        "Creative liberty", ["Literal", "Some", "Lots"], value="Some",
+        help="Literal stages only what the text says. Higher settings add "
+             "background life, set dressing, weather and a time of day of the app's choosing.")
+    liberty = ["Literal", "Some", "Lots"].index(liberty_name)
     pace = st.slider("Pace (seconds per scene)", 0.5, 2.0, 1.0, 0.1,
                      help="Higher is slower: 2.0 doubles every scene's length.")
     max_scenes = st.slider("Maximum scenes", 3, 24, 12,
@@ -67,8 +75,13 @@ text = st.text_area(
     placeholder="Once upon a time a fox walked through the forest at night…",
 )
 
-if st.button("Create animation", type="primary", disabled=not text.strip()):
+make, again, _ = st.columns([1, 1, 3])
+if make.button("Create animation", type="primary", disabled=not text.strip()):
     st.session_state["source"] = text
+    st.session_state["take"] = 0
+if again.button("Reimagine", disabled=not liberty or not st.session_state.get("source"),
+                help="Another take on the same text (needs some creative liberty)."):
+    st.session_state["take"] = st.session_state.get("take", 0) + 1
 
 source = st.session_state.get("source")
 if not source:
@@ -77,12 +90,13 @@ if not source:
             "actions) become scenes; abstract passages become motion graphics.")
     st.stop()
 
-board = build_storyboard(source, max_scenes=max_scenes, pace=pace)
+board = build_storyboard(source, max_scenes=max_scenes, pace=pace, liberty=liberty,
+                         variation=st.session_state.get("take", 0))
 if not board["scenes"]:
     st.warning("There is no text to animate.")
     st.stop()
 
-html = render_html(board, show_captions=captions)
+html = render_html(board, show_captions=captions, style=style.lower())
 if hasattr(st, "iframe"):
     st.iframe(html, height=height)
 else:  # Streamlit < 1.56
@@ -111,7 +125,10 @@ with st.expander("Storyboard: how the text was interpreted"):
                 "Cast": ", ".join(
                     f"{a['name'] or a['kind']}"
                     f"{' ×' + str(a['count']) if a['count'] > 1 else ''} ({a['action']})"
-                    for a in s["actors"]) or "—",
+                    for a in s["actors"] if not a["ambient"]) or "—",
+                "Added by the app": ", ".join(
+                    f"{a['kind']}{' ×' + str(a['count']) if a['count'] > 1 else ''}"
+                    for a in s["actors"] if a["ambient"]) or "—",
                 "Props": ", ".join(p["kind"] for p in s["props"]) or "—",
                 "Seconds": s["duration"],
             }

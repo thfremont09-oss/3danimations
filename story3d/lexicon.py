@@ -606,7 +606,7 @@ ACTION_WORDS = _words({
         "gossip joke beg plead complain confess warn thank welcome introduce "
         "converse debate scold command",
     "fight":
-        "fight kill murder destroy vanquish behead slaughter assassinate devour battle attack strike struggle wrestle duel defeat slay clash "
+        "fight kill murder destroy vanquish behead slaughter assassinate battle attack strike struggle wrestle duel defeat slay clash "
         "punch kick stab slash shoot bite claw ambush raid invade conquer "
         "quarrel brawl spar",
     "look":
@@ -668,10 +668,10 @@ HOLD_PREPS = {"with", "holding", "carrying"}
 SEATABLE = {"bench": ("sit", 0.55), "sofa": ("sit", 0.6), "rock": ("sit", 1.0),
             "haystack": ("sit", 1.25), "barrel": ("sit", 0.92), "bed": ("lie", 0.68),
             "bathtub": ("sit", 0.35), "bridge": ("stand", 1.12), "table": ("stand", 0.88)}
-STILL_ACTIONS = {"idle", "sleep", "talk", "look", "wave", "dance", "jump", "work", "dead"}
+STILL_ACTIONS = {"eat", "drink", "feed", "idle", "sleep", "talk", "look", "wave", "dance", "jump", "work", "dead"}
 
 FLYERS = {"rocket", "plane", "balloon", "ufo", "heli"}
-PHYSICAL_ACTIONS = {"walk", "run", "fly", "jump", "dance", "swim", "sleep", "fall", "fight",
+PHYSICAL_ACTIONS = {"eat", "drink", "feed", "walk", "run", "fly", "jump", "dance", "swim", "sleep", "fall", "fight",
                     "wave", "work", "slay", "die"}
 
 MOOD_WORDS = _words({
@@ -704,6 +704,8 @@ MOOD_WORDS = _words({
 IRREGULAR = {
     "ridden": "ride", "driven": "drive", "held": "hold", "brought": "bring", "took": "take",
     "caught": "catch", "threw": "throw", "had": "have", "has": "have",
+    "ate": "eat", "eaten": "eat", "eats": "eat", "drank": "drink", "drunk": "drink",
+    "fed": "feed", "bit": "bite", "bitten": "bite", "dined": "dine",
     "slew": "slay", "slain": "slay", "ran": "run", "flew": "fly", "flown": "fly", "swam": "swim", "swum": "swim",
     "fell": "fall", "fallen": "fall", "slept": "sleep", "sang": "sing", "sung": "sing",
     "went": "go", "gone": "go", "came": "come", "fought": "fight", "rode": "ride",
@@ -1088,3 +1090,123 @@ AMBIENT["village"] += [("tractor", "walk", 1), ("cart", "walk", 1), ("bicycle", 
 AMBIENT["meadow"] += [("tractor", "walk", 1), ("bicycle", "walk", 1)]
 AMBIENT["snow"] += [("sled", "walk", 1)]
 AMBIENT["mountain"] += [("helicopter", "fly", 1)]
+
+
+# --------------------------------------------------------------------------
+# Eating and drinking
+# --------------------------------------------------------------------------
+ACTION_WORDS.update(_words({
+    "eat": "eat munch chew nibble gobble devour dine feast snack graze peck lick consume "
+           "gnaw swallow chomp taste scoff",
+    "drink": "drink sip gulp slurp",
+    "feed": "feed",
+}))
+CLAUSE_BREAKS = {"while", "then", "but", "when", "after", "before", "because", "so", "as",
+                 "until", "whereas", "although", "though", "meanwhile", "later"}
+# "had a burger", "enjoyed some pizza": these only mean eating when food follows.
+EAT_IF_FOOD = {"have", "enjoy", "order", "share", "finish", "try", "grab", "get", "bite",
+               "love", "like", "want", "buy", "cook", "make", "bake"}
+
+# canonical food -> what the viewer draws; "drink" ones are sipped, not bitten
+FOOD: dict[str, dict] = {k: {"drink": False} for k in (
+    "hamburger pizza hotdog sandwich taco fries icecream cookie donut cake cupcake pie "
+    "apple banana carrot orange strawberry watermelon grapes corn bread cheese egg "
+    "drumstick steak fish sushi noodles soup cereal salad pancakes popcorn candy "
+    "chocolate bone honey nut seeds grass bamboo pretzel croissant").split()}
+FOOD.update({k: {"drink": True} for k in
+             "soda juice milk water coffee tea milkshake lemonade potion".split()})
+
+FOOD_WORDS = _words({
+    "hamburger": "hamburger burger cheeseburger whopper",
+    "pizza": "pizza",
+    "hotdog": "hotdog sausage frankfurter",
+    "sandwich": "sandwich sub toast panini wrap",
+    "taco": "taco burrito quesadilla nacho",
+    "fries": "fries chips",
+    "icecream": "icecream gelato sundae popsicle",
+    "cookie": "cookie biscuit cracker brownie",
+    "donut": "donut doughnut bagel",
+    "cake": "cake",
+    "cupcake": "cupcake muffin",
+    "pie": "pie tart",
+    "apple": "apple",
+    "banana": "banana",
+    "carrot": "carrot vegetable veggies",
+    "orange": "orange tangerine peach",
+    "strawberry": "strawberry berry berries cherry cherries raspberry blueberry",
+    "watermelon": "watermelon melon",
+    "grapes": "grape grapes",
+    "corn": "corn",
+    "bread": "bread loaf baguette roll bun",
+    "cheese": "cheese",
+    "egg": "egg eggs omelette",
+    "drumstick": "drumstick ham bacon meat",
+    "steak": "steak",
+    "sushi": "sushi",
+    "noodles": "noodles spaghetti pasta ramen macaroni rice curry",
+    "soup": "soup stew porridge oatmeal broth chili",
+    "cereal": "cereal",
+    "salad": "salad",
+    "pancakes": "pancake pancakes waffle waffles crepe",
+    "popcorn": "popcorn",
+    "candy": "candy lollipop sweets",
+    "chocolate": "chocolate",
+    "bone": "bone",
+    "honey": "honey",
+    "nut": "nut nuts acorn peanut peanuts",
+    "seeds": "seed seeds worm worms crumbs grain",
+    "grass": "grass hay clover",
+    "bamboo": "bamboo",
+    "pretzel": "pretzel",
+    "croissant": "croissant pastry",
+    "soda": "soda pop cola coke",
+    "juice": "juice smoothie",
+    "milk": "milk",
+    "water": "water",
+    "coffee": "coffee cocoa espresso latte",
+    "tea": "tea",
+    "milkshake": "milkshake shake",
+    "lemonade": "lemonade",
+    "potion": "potion elixir",
+})
+# Characters that become food when they follow an eating word: "the cat ate the fish".
+EDIBLE_ACTORS = {"fish": "fish", "chicken": "drumstick", "crab": "drumstick"}
+# Words that are food only right after an eating word ("drank water", "ate a fish"),
+# because elsewhere they mean something else ("the water", "a roll").
+FOOD_ONLY_AFTER_EATING = {"water", "roll", "wrap", "chips", "pop", "shake", "orange",
+                          "sub", "toast", "rice", "worm", "worms"}
+
+# A meal word with no named food: what goes on the plate.
+MEAL_FOOD = {"breakfast": "pancakes", "brunch": "pancakes", "lunch": "sandwich",
+             "dinner": "noodles", "supper": "soup", "meal": "drumstick",
+             "feast": "drumstick", "banquet": "drumstick", "picnic": "sandwich",
+             "snack": "cookie", "dessert": "icecream", "barbecue": "hotdog",
+             "bbq": "hotdog", "party": "pizza", "birthday": "cake", "teatime": "tea"}
+# An eater with no named food: what it most likely eats or drinks.
+EATER_FOOD = {"dog": "bone", "cat": "fish", "rabbit": "carrot", "monkey": "banana",
+              "bear": "honey", "mouse": "cheese", "squirrel": "nut", "panda": "bamboo",
+              "horse": "apple", "donkey": "carrot", "cow": "grass", "sheep": "grass",
+              "goat": "grass", "deer": "grass", "zebra": "grass", "giraffe": "grass",
+              "llama": "grass", "elephant": "grass", "rhino": "grass", "kangaroo": "grass",
+              "pig": "apple", "bird": "seeds", "seagull": "fish", "duck": "bread",
+              "swan": "bread", "chicken": "seeds", "parrot": "seeds", "owl": "seeds",
+              "crow": "seeds", "penguin": "fish", "lion": "steak", "tiger": "steak",
+              "wolf": "steak", "fox": "drumstick", "crocodile": "steak", "dragon": "steak",
+              "dinosaur": "steak", "giant": "drumstick", "monster": "drumstick",
+              "child": "icecream", "robot": "soda", "alien": "potion", "wizard": "potion",
+              "witch": "potion", "king": "drumstick", "queen": "cake", "pirate": "drumstick",
+              "chef": "soup", "santa": "cookie", "elf": "cookie", "fairy": "strawberry"}
+DRINKER_FOOD = {"child": "milk", "person": "coffee", "wizard": "potion", "witch": "potion",
+                "queen": "tea", "king": "tea", "robot": "soda"}
+
+# --------------------------------------------------------------------------
+# Weapons: how each fighter strikes
+# --------------------------------------------------------------------------
+for _kind, _weapon in {
+    "knight": "sword", "pirate": "sword", "king": "sword", "queen": "sword",
+    "skeleton": "sword", "devil": "sword", "dwarf": "axe", "elf": "sword",
+    "giant": "club", "monster": "club", "scarecrow": "club",
+    "wizard": "staff", "witch": "staff", "alien": "blaster", "astronaut": "blaster",
+    "police": "fist", "superhero": "fist", "robot": "fist",
+}.items():
+    MODELS[_kind]["weapon"] = _weapon

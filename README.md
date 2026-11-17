@@ -79,6 +79,20 @@ Relationships between things are read too:
   a sword". The object goes in the hand (or mouth).
 - **Using furniture:** "they sat on a bench", "the king slept in the bed".
 
+- **Eating and drinking:** "the boy ate a hamburger", "the king had a coffee",
+  "the family had dinner at the table", "the cow grazed", "the girl fed the
+  ducks". People lift food to their mouths and bite (it shrinks bite by bite)
+  or sip from a cup; diners sit at the table with a plate each; animals lower
+  their heads to food on the ground. About 50 foods and drinks are modelled.
+- **Fights:** fighters charge in and stand a lunge apart, measured from their
+  actual bodies and weapons, then trade blows: hits, blocks, dodges and
+  clashes, with the defender reacting to each one. Knights swing swords,
+  giants clubs, wizards cast bolts, dragons bite and breathe fire, and
+  unarmed fighters punch and kick. Two against one surround their foe; an
+  army against monsters becomes several fights side by side. Sparks and comic
+  words ("POW!", "CLANG!") mark where blows land, and the camera keeps both
+  sides in frame.
+
 Killing verbs are tracked: "the pirate slew the dragon" ends with the dragon
 down, and it stays out of later scenes.
 

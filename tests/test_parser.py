@@ -229,3 +229,80 @@ def test_sitting_and_lying_on_furniture():
     assert scene("A boy and a girl sat on a bench.")["actors"][0]["count"] == 2
     actors, props = rel("The king slept in the bed.")
     assert actors == {"king": ("sleep", None, "bed", None)} and props == ["bed"]
+
+
+def meal(text, index=-1):
+    return {a["kind"]: (a["action"], (a["food"] or {}).get("kind"), a["count"])
+            for a in scene(text, index)["actors"]}
+
+
+def test_eating_and_drinking():
+    assert meal("The boy ate a hamburger.") == {"child": ("eat", "hamburger", 1)}
+    assert meal("The girl drank a milkshake.") == {"child": ("drink", "milkshake", 1)}
+    assert meal("The king had a coffee.")["king"] == ("drink", "coffee", 1)
+    assert meal("The boy and the girl ate pizza.") == {"child": ("eat", "pizza", 2)}
+    assert meal("A dog chewed a bone.")["dog"][:2] == ("eat", "bone")
+    assert meal("The cow grazed in the meadow.")["cow"][:2] == ("eat", "grass")
+    assert meal("The cat ate the fish.") == {"cat": ("eat", "fish", 1)}   # the fish is food here
+
+
+def test_meals_bring_a_table_and_a_plate():
+    sc = scene("The family had dinner at the table.")
+    assert sc["actors"][0]["action"] == "eat" and sc["actors"][0]["food"]["kind"] == "noodles"
+    assert [p["kind"] for p in sc["props"]] == ["table"]
+    assert meal("The kids had breakfast.")["child"][1] == "pancakes"
+
+
+def test_only_the_eaters_eat():
+    got = meal("The dog chased the cat and the boy ate a hamburger.")
+    assert got["child"] == ("eat", "hamburger", 1)
+    assert got["dog"][0] == "run" and got["cat"][0] != "eat"
+
+
+def test_feeding_and_being_eaten():
+    got = meal("The girl fed the ducks bread.")
+    assert got["child"][:2] == ("feed", "bread") and got["duck"][:2] == ("eat", "bread")
+    assert {k: v[0] for k, v in meal("The wolf ate the pig.").items()} == {"wolf": "slay", "pig": "die"}
+
+
+def test_food_nobody_eats_is_held_or_on_the_table():
+    sc = scene("A boy with a hamburger walked.")
+    assert sc["actors"][0]["holding"]["kind"] == "hamburger" and sc["actors"][0]["holding"]["food"]
+    sc = scene("There was a pizza on the table.")
+    assert sc["props"] == [{**sc["props"][0], "kind": "table", "items": ["pizza"]}]
+    assert scene("An orange cat slept.")["actors"][0]["food"] is None
+
+
+def test_pronoun_subjects_with_nobody_introduced():
+    assert meal("They ate cookies.") == {"person": ("eat", "cookie", 2)}
+
+
+def test_fighters_have_sides():
+    def sides(text):
+        return {a["kind"]: (a["count"], a["side"]) for a in scene(text)["actors"]}
+    assert sides("The knight fought the dragon.") == {"knight": (1, 0), "dragon": (1, 1)}
+    assert sides("Two knights fought a giant.") == {"knight": (2, 0), "giant": (1, 1)}
+    assert sides("The cat and the dog had a fight.") == {"cat": (1, 0), "dog": (1, 1)}
+    assert sides("The king was killed by a wolf.") == {"king": (1, 0), "wolf": (1, 1)}
+    # different words for the same kind of character are different characters
+    assert sides("The pirate and the ninja fought.") == {"pirate": (2, 0)}
+
+
+def test_a_mounted_fighter_rides_into_battle():
+    actors = {a["kind"]: a for a in scene("The knight on a horse fought the dragon.")["actors"]}
+    assert actors["knight"]["riding"] == "horse" and actors["knight"]["holding"]["kind"] == "sword"
+    assert actors["horse"]["action"] == "fight" and actors["dragon"]["action"] == "fight"
+
+
+def test_every_food_and_weapon_can_be_drawn():
+    import re
+    from pathlib import Path
+    from story3d import lexicon as L
+
+    js = (Path(L.__file__).parent / "static" / "viewer.js").read_text()
+    makers = set(re.findall(r"^  (\w+)(?:\(\)|: \(\) =>)", js.split("const FOOD_MAKERS = {")[1].split("\n};")[0], re.M))
+    assert set(L.FOOD) <= makers, set(L.FOOD) - makers
+    for table in (L.MEAL_FOOD, L.EATER_FOOD, L.DRINKER_FOOD, L.EDIBLE_ACTORS):
+        assert set(table.values()) <= set(L.FOOD)
+    weapons = {m.get("weapon") for m in L.MODELS.values()} - {None}
+    assert weapons <= {"sword", "axe", "club", "staff", "blaster", "fist"}

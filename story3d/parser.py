@@ -194,19 +194,31 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
     props: list[str] = []
     prop_pos: dict[str, int] = {}
     actions: list[tuple[int, str]] = []
+    foods: list[dict] = []
+    meal_food: str | None = None
+    meal_pos: list[int] = []
     settings, hints, times, weathers, moods = [], [], [], [], Counter()
 
-    def add_actor(kind: str, pos: int, count: int = 1, name: str | None = None) -> dict:
+    def add_actor(kind: str, pos: int, count: int = 1, name: str | None = None,
+                  word: str | None = None) -> dict:
         key = f"{kind}:{name}" if name else kind
         actor = actors.get(key)
         if actor is None:
             actor = actors[key] = {"id": key, "kind": kind, "name": name,
-                                   "count": count, "pos": pos}
-        elif set(lows[max(0, pos - 2): pos]) & {"a", "an", "another"}:
-            actor["count"] += count              # "a boy and a girl" are two children
+                                   "count": count, "pos": pos, "words": {word}}
+        elif set(lows[max(0, pos - 2): pos]) & {"a", "an", "another"} \
+                or (word and word not in actor["words"]):
+            # "a boy and a girl", "the pirate and the ninja": two characters
+            actor["count"] += count
+            actor["words"].add(word)
         else:
             actor["count"] = max(actor["count"], count)
         return actor
+
+    def eating_word(w: str) -> bool:
+        hit = _find(w, L.ACTION_WORDS)
+        return bool(hit and hit[0] in ("eat", "drink", "feed")) or any(
+            stem in L.EAT_IF_FOOD for stem, _ in _candidates(w))
 
     last_actor: tuple[int, dict] | None = None
     for i, low in enumerate(lows):
@@ -229,16 +241,30 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
         if low == "balloon" and "air" in lows[max(0, i - 2): i]:
             last_actor = (i, add_actor("balloon", i))          # hot-air balloon
             continue
-        if low in L.COLLECTIVES:
+        after_eating = any(eating_word(w) for w in lows[max(0, i - 4): i])
+        food_kind = None
+        if (hit := _find(low, L.FOOD_WORDS)) and (
+                low not in L.FOOD_ONLY_AFTER_EATING or after_eating):
+            food_kind = hit[0]
+        elif after_eating and (hit := _find(low, L.ACTOR_WORDS)) and hit[0] in L.EDIBLE_ACTORS:
+            food_kind = L.EDIBLE_ACTORS[hit[0]]              # "the cat ate the fish"
+        if hit := _find(low, L.MEAL_FOOD):
+            meal_food = meal_food or hit[0]
+            meal_pos.append(i)
+
+        if food_kind:
+            foods.append({"kind": food_kind, "pos": i, "word": low, "used": False})
+        elif low in L.COLLECTIVES:
             kind, count = L.COLLECTIVES[low]
-            last_actor = (i, add_actor(kind, i, count))
+            last_actor = (i, add_actor(kind, i, count, word=low))
         elif hit := _find(low, L.ACTOR_WORDS):
             kind, plural = hit
             many = world.rng.randint(3, 5) if world.liberty else 3
             count = many if plural else 1
             for back in lows[max(0, i - 2): i]:
                 count = L.NUMBERS.get(back, count)
-            last_actor = (i, add_actor(kind, i, count))
+            stem = next((s for s, _ in _candidates(low) if s in L.ACTOR_WORDS), low)
+            last_actor = (i, add_actor(kind, i, count, word=stem))
         elif hit := _find(low, L.PROP_WORDS):
             if hit[0] not in props:
                 props.append(hit[0])
@@ -309,8 +335,9 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
                     actor["action"] = "ride"
                 else:
                     actor["riding"] = None
-        elif low_set & L.FIRST_PERSON and physical:
-            count = 2 if low_set & {"we", "us", "our"} else 1
+        elif (low_set & L.FIRST_PERSON or low_set & L.SUBJECT_PRONOUNS) and physical:
+            # "I ran", "she danced", "they ate" with nobody introduced yet
+            count = 2 if low_set & {"we", "us", "our", "they"} else 1
             cast.append({"id": "person:narrator", "kind": "person", "name": None,
                          "count": count, "action": physical[0]})
     elif world.cast:
@@ -358,9 +385,98 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
         if killer is not None and killer is not victim and killer["action"] != "die":
             killer["action"] = "slay"
 
-    # ---- who rides, holds or sits on what --------------------------------
+    # ---- eating and drinking ---------------------------------------------
     def base_of(actor: dict) -> str:
         return L.MODELS[actor["kind"]]["base"]
+
+    def verbish(w: str) -> bool:
+        return bool(_find(w, L.ACTION_WORDS) or _find(w, L.KILL_WORDS)) or eating_word(w)
+
+    placed = sorted((a for a in cast if a.get("pos", -1) >= 0), key=lambda a: a["pos"])
+
+    def group_before(i: int) -> list[dict]:
+        """The characters doing the verb at i: 'the boy and the dog ate ...'."""
+        group: list[dict] = []
+        edge = i
+        for a in reversed([a for a in placed if a["pos"] < i]):
+            between = lows[a["pos"] + 1: edge]
+            if len(between) > 5 or set(between) & L.CLAUSE_BREAKS \
+                    or any(verbish(w) for w in between):
+                break
+            group.append(a)
+            edge = a["pos"]
+        if len(group) > 1 and any(verbish(w) for w in lows[max(0, group[-1]["pos"] - 4): group[-1]["pos"]]):
+            group.pop()   # "the dog chased the cat and the boy ate": the cat is chased, not eating
+        if not group:     # "they ate", "then ate": whoever was carried over
+            group = [a for a in cast if a.get("pos", -1) < 0] or (cast[:1] if len(cast) == 1 else [])
+        return [a for a in group if base_of(a) not in L.VEHICLES]
+
+    def group_after(i: int, limit: int = 5) -> list[dict]:
+        group: list[dict] = []
+        edge = i
+        for a in [a for a in placed if a["pos"] > i]:
+            between = lows[edge + 1: a["pos"]]
+            if len(between) > limit or set(between) & L.CLAUSE_BREAKS \
+                    or any(verbish(w) for w in between):
+                break
+            group.append(a)
+            edge = a["pos"]
+        return [a for a in group if base_of(a) not in L.VEHICLES]
+
+    def default_food(actor: dict, drink: bool) -> str:
+        if drink:
+            return L.DRINKER_FOOD.get(actor["kind"], "juice" if base_of(actor) in ("person", "robot")
+                                      else "water")
+        if meal_food and base_of(actor) in ("person", "robot"):
+            return meal_food
+        return L.EATER_FOOD.get(actor["kind"], "sandwich" if base_of(actor) in ("person", "robot")
+                                else "grass" if base_of(actor) == "quad" else "seeds")
+
+    food_of: dict[str, str] = {}
+    for i, low in enumerate(lows):
+        hit = _find(low, L.ACTION_WORDS)
+        kind = hit[0] if hit and hit[0] in ("eat", "drink", "feed") else None
+        nxt = next((f for f in foods if 0 < f["pos"] - i <= 6 and not f["used"]), None)
+        if kind is None and eating_word(low) and (
+                (nxt and nxt["pos"] - i <= 4) or any(0 < p - i <= 3 for p in meal_pos)):
+            kind = "eat"                     # "had a burger", "bit into an apple", "had dinner"
+        if kind is None:
+            continue
+        if kind == "eat" and nxt and L.FOOD[nxt["kind"]]["drink"]:
+            kind = "drink"                                 # "had a coffee"
+        if kind == "feed":
+            feeders, eaters = group_before(i), group_after(i)
+        else:
+            feeders, eaters = [], group_before(i)
+        prey = None if nxt or kind != "eat" else next(
+            (a for a in group_after(i, 3) if a not in eaters), None)
+        if prey is not None and eaters and prey["id"] not in dead_before:
+            prey["action"] = "die"                         # "the wolf ate the pig"
+            world.dead.add(prey["id"])
+            for eater in eaters:
+                eater["action"] = "slay"
+            continue
+        if nxt:
+            nxt["used"] = True
+        for eater in eaters:
+            if eater["action"] in ("die", "dead", "slay"):
+                continue
+            food = nxt["kind"] if nxt else default_food(eater, kind == "drink")
+            food_of[eater["id"]] = food
+            if eater["action"] not in ("walk", "run", "ride") or kind == "feed":
+                eater["action"] = "drink" if L.FOOD[food]["drink"] else "eat"
+        for feeder in feeders:
+            if eaters:
+                food_of[feeder["id"]] = food_of.get(eaters[0]["id"], "bread")
+                feeder["action"] = "feed"
+
+    for actor in cast:          # picked "eat" from a nearby verb but is not the one eating
+        if actor["action"] in ("eat", "drink", "feed") and actor["id"] not in food_of:
+            earlier = [k for p, k in actions if p < actor.get("pos", -1)
+                       and k not in ("eat", "drink", "feed")]
+            actor["action"] = earlier[-1] if earlier else "idle"
+
+    # ---- who rides, holds or sits on what --------------------------------
 
     def others_between(lo: int, hi: int) -> bool:
         return any(lo < a["pos"] < hi for a in placed)
@@ -407,6 +523,9 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
                         or others_between(mpos, rpos):
                     continue
                 verb_used = verb_used or ("move" if passive or carrying else None)
+            if rider["action"] in ("fight", "slay"):
+                mount["action"] = rider["action"]    # the horse carries the knight into the fight
+                rider["armed"] = True
             rider["riding"] = mount["id"]
             rider["action"] = "ride"
             mount["carrying"] = True
@@ -416,10 +535,26 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
                 mount["action"] = "fly"
             elif mbase == "fish":
                 mount["action"] = "swim"
-            elif mount["action"] not in ("walk", "run", "fly"):
+            elif mount["action"] not in ("walk", "run", "fly", "fight", "slay"):
                 mount["action"] = "walk"
 
     holding: dict[str, str] = {}
+    table_items: list[str] = []
+    for food in foods:                       # food nobody eats: held, on the table, or a prop
+        if food["used"]:
+            continue
+        before = [a for a in reversed(placed) if 0 < food["pos"] - a["pos"] <= 10
+                  and base_of(a) not in L.VEHICLES]
+        holder = before[0] if before else None
+        between = lows[holder["pos"] + 1: food["pos"]] if holder else []
+        if holder and holder["id"] not in holding and holder["id"] not in food_of and (
+                set(between) & L.HOLD_PREPS or any(_find(w, L.HOLD_WORDS) for w in between)):
+            holding[holder["id"]] = "food:" + food["kind"]
+        elif "table" in props:
+            table_items.append(food["kind"])
+        elif (hit := _find(food["word"], L.PROP_WORDS)) and hit[0] not in props:
+            props.append(hit[0])
+            prop_pos[hit[0]] = food["pos"]
     for kind in list(props):
         ppos = prop_pos.get(kind, -1)
         before = [a for a in reversed(placed) if 0 < ppos - a["pos"] <= 10]
@@ -434,6 +569,26 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
                                   or any(_find(w, L.HOLD_WORDS) for w in between)):
             holding[holder["id"]] = kind
             props.remove(kind)
+
+    for actor in cast:
+        if actor.get("armed") and actor["id"] not in holding and base_of(actor) == "person":
+            holding[actor["id"]] = "sword"
+
+    # ---- who fights whom: the side before the fighting word and the side after
+    fighters = [a for a in cast if a["action"] in ("fight", "slay", "die")]
+    verbs = [i for i, w in enumerate(lows)
+             if ((h := _find(w, L.ACTION_WORDS)) and h[0] == "fight") or _find(w, L.KILL_WORDS)
+             or (eating_word(w) and any(a["action"] == "slay" for a in fighters))]
+    if fighters and verbs:
+        for a in fighters:
+            a["side"] = 0 if a.get("pos", -1) < verbs[0] else 1
+        if len({a["side"] for a in fighters}) == 1 and len(fighters) > 1:
+            for a in fighters[1:]:      # "the cat and the dog fought": one against the other
+                a["side"] = 1
+        killers = [a for a in fighters if a["action"] == "slay"]
+        for victim in (a for a in fighters if a["action"] == "die"):
+            if killers and killers[0]["side"] == victim["side"]:
+                victim["side"] = 1 - victim["side"]
 
     for kind in props:
         ppos = prop_pos.get(kind, -1)
@@ -553,17 +708,29 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
              "count": min(a["count"], 5), "action": a["action"],
              "ambient": bool(a.get("ambient")),
              "riding": a.get("riding"), "on": a.get("on"),
-             "holding": ({"kind": holding[a["id"]], "base": L.PROPS[holding[a["id"]]]["base"],
-                          "scale": L.HOLDABLE[holding[a["id"]]]}
-                         if a["id"] in holding else None),
+             "holding": _held(holding.get(a["id"])),
+             "food": ({"kind": food_of[a["id"]], "drink": L.FOOD[food_of[a["id"]]]["drink"]}
+                      if a["id"] in food_of else None),
+             "side": a.get("side", 0),
              "model": {**{k: v for k, v in L.MODELS[a["kind"]].items()
                           if k not in ("default", "implies", "water")},
                        **({"open": True} if a.get("carrying") else {})}}
             for a in cast[:6] + extras
         ],
-        "props": [{"kind": p, **L.PROPS[p]} for p in props[:5]],
+        "props": [{"kind": p, **L.PROPS[p],
+                   **({"items": table_items[:6]} if p == "table" and table_items else {})}
+                  for p in props[:5]],
         "keywords": _keywords(words),
     }
+
+
+def _held(kind: str | None) -> dict | None:
+    if kind is None:
+        return None
+    if kind.startswith("food:"):
+        food = kind[5:]
+        return {"kind": food, "base": "food", "scale": 1.0, "food": True}
+    return {"kind": kind, "base": L.PROPS[kind]["base"], "scale": L.HOLDABLE[kind]}
 
 
 def build_storyboard(text: str, max_scenes: int = 12, pace: float = 1.0,

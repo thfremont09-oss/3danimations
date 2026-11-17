@@ -181,3 +181,51 @@ def test_an_ordinary_fight_kills_nobody():
     board = build_storyboard("The knight fought the dragon. Then they both slept.")
     assert cast(board["scenes"][0]) == {"knight": "fight", "dragon": "fight"}
     assert cast(board["scenes"][1]) == {"knight": "sleep", "dragon": "sleep"}
+
+
+def rel(text):
+    sc = scene(text)
+    return ({a["kind"]: (a["action"], a["riding"], a["on"], (a["holding"] or {}).get("kind"))
+             for a in sc["actors"]}, [p["kind"] for p in sc["props"]])
+
+
+def test_riding_in_or_on_something():
+    actors, _ = rel("A dog riding in a car.")
+    assert actors == {"dog": ("ride", "car", None, None), "car": ("walk", None, None, None)}
+    assert scene("A dog riding in a car.")["actors"][1]["model"]["open"] is True
+    assert rel("The knight rode a horse.")[0]["knight"][:2] == ("ride", "horse")
+    assert rel("A girl on a bicycle waved.")[0]["child"][:2] == ("ride", "bicycle")
+    assert rel("A car driven by a dog.")[0]["dog"][:2] == ("ride", "car")
+    flying = rel("A wizard flew on a dragon.")[0]
+    assert flying["wizard"][:2] == ("ride", "dragon") and flying["dragon"][0] == "fly"
+    both = rel("A dog and a cat drove a bus.")[0]
+    assert both["dog"][1] == both["cat"][1] == "bus"
+
+
+def test_passing_or_walking_beside_is_not_riding():
+    assert rel("The knight rode past the dragon.")[0]["knight"][1] is None
+    assert rel("A man walked on the beach with a horse.")[0]["person"][1] is None
+    assert rel("The dog chased the car.")[0]["dog"][1] is None
+
+
+def test_riders_stay_aboard_in_the_next_scene():
+    board = build_storyboard("A dog rode in a car. Then they drove to the beach.")
+    second = {a["kind"]: a for a in board["scenes"][1]["actors"]}
+    assert second["dog"]["riding"] == "car" and second["dog"]["action"] == "ride"
+
+
+def test_holding_things():
+    actors, props = rel("A girl carried a basket and a dog carried a bone.")
+    assert actors["child"][3] == "basket" and actors["dog"][3] == "bone" and props == []
+    assert rel("The dog played with a ball.")[0]["dog"][3] == "ball"
+    king = rel("The king sat on a horse holding a sword.")[0]
+    assert king["king"][1] == "horse" and king["king"][3] == "sword"
+    assert rel("A girl stood near a basket.")[1] == ["basket"]
+
+
+def test_sitting_and_lying_on_furniture():
+    actors, props = rel("A boy and a girl sat on a bench.")
+    assert actors["child"][2] == "bench" and props == ["bench"]
+    assert scene("A boy and a girl sat on a bench.")["actors"][0]["count"] == 2
+    actors, props = rel("The king slept in the bed.")
+    assert actors == {"king": ("sleep", None, "bed", None)} and props == ["bed"]

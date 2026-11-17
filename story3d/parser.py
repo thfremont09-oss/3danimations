@@ -48,9 +48,15 @@ def _candidates(word: str):
     for suffix, repl in _PLURAL_SUFFIXES:
         if word.endswith(suffix) and len(word) - len(suffix) >= 2:
             yield word[: -len(suffix)] + repl, True
+    if word.endswith("ied") and len(word) > 4:
+        yield word[:-3] + "y", False               # carried, hurried
     for suffix in _VERB_SUFFIXES:
         if word.endswith(suffix) and len(word) - len(suffix) >= 2:
             stem = word[: -len(suffix)]
+            if suffix == "d":                      # danced -> dance, but bed is not "bee"
+                if stem.endswith("e"):
+                    yield stem, False
+                continue
             yield stem + "e", False
             if len(stem) > 2 and stem[-1] == stem[-2]:
                 yield stem[:-1], False
@@ -186,6 +192,7 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
 
     actors: dict[str, dict] = {}
     props: list[str] = []
+    prop_pos: dict[str, int] = {}
     actions: list[tuple[int, str]] = []
     settings, hints, times, weathers, moods = [], [], [], [], Counter()
 
@@ -195,6 +202,8 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
         if actor is None:
             actor = actors[key] = {"id": key, "kind": kind, "name": name,
                                    "count": count, "pos": pos}
+        elif set(lows[max(0, pos - 2): pos]) & {"a", "an", "another"}:
+            actor["count"] += count              # "a boy and a girl" are two children
         else:
             actor["count"] = max(actor["count"], count)
         return actor
@@ -217,6 +226,9 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
             continue
         low = low.split("'")[0]
 
+        if low == "balloon" and "air" in lows[max(0, i - 2): i]:
+            last_actor = (i, add_actor("balloon", i))          # hot-air balloon
+            continue
         if low in L.COLLECTIVES:
             kind, count = L.COLLECTIVES[low]
             last_actor = (i, add_actor(kind, i, count))
@@ -230,6 +242,7 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
         elif hit := _find(low, L.PROP_WORDS):
             if hit[0] not in props:
                 props.append(hit[0])
+                prop_pos[hit[0]] = i
 
         for dressing in L.PLACE_DRESSING.get(low, ()):
             if dressing not in props:
@@ -289,6 +302,13 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
         if recalled and (low_set & L.PRONOUNS or subjects or physical):
             for prev in recalled:
                 cast.append({**prev, "action": act_for(prev["kind"], -1)})
+            # Whoever was riding is still riding, as long as their ride came along.
+            here = {a["id"] for a in cast}
+            for actor in cast:
+                if actor.get("riding") in here:
+                    actor["action"] = "ride"
+                else:
+                    actor["riding"] = None
         elif low_set & L.FIRST_PERSON and physical:
             count = 2 if low_set & {"we", "us", "our"} else 1
             cast.append({"id": "person:narrator", "kind": "person", "name": None,
@@ -338,6 +358,93 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
         if killer is not None and killer is not victim and killer["action"] != "die":
             killer["action"] = "slay"
 
+    # ---- who rides, holds or sits on what --------------------------------
+    def base_of(actor: dict) -> str:
+        return L.MODELS[actor["kind"]]["base"]
+
+    def others_between(lo: int, hi: int) -> bool:
+        return any(lo < a["pos"] < hi for a in placed)
+
+    placed = sorted((a for a in cast if a.get("pos", -1) >= 0), key=lambda a: a["pos"])
+    for mount in placed:
+        mbase, mpos = base_of(mount), mount["pos"]
+        vehicle = mbase in L.VEHICLES
+        if not vehicle and mbase not in ("quad", "bird", "fish"):
+            continue
+        near = set(lows[max(0, mpos - 3): mpos])
+        verb_used = None
+        for rider in placed:
+            if rider is mount or rider.get("riding") or mount.get("riding") \
+                    or base_of(rider) in L.VEHICLES:
+                continue
+            rpos = rider["pos"]
+            if rpos < mpos:                                   # "a dog riding in a car"
+                between = lows[rpos + 1: mpos]
+                if len(between) > 9:
+                    continue
+                verbs = [(j, _find(w, L.RIDE_WORDS)) for j, w in enumerate(between)]
+                verbs = [(j, hit[0], next(s for s, _ in _candidates(between[j])
+                                          if s in L.RIDE_WORDS))
+                         for j, hit in verbs if hit]
+                if not vehicle:
+                    verbs = [v for v in verbs if v[2] in L.RIDE_ANIMAL_VERBS]
+                if verbs:
+                    j, kind, _ = verbs[-1]
+                    if set(between[j + 1:]) & L.RIDE_BLOCKERS \
+                            or others_between(rpos + 1 + j, mpos):
+                        continue
+                    verb_used = verb_used or kind
+                elif not (near & (L.INSIDE_WORDS if vehicle else L.ONTOP_WORDS)) \
+                        or len(between) > 5 or set(between) & {"past", "near", "behind"}:
+                    continue
+            else:                                             # "a car driven by a dog"
+                between = lows[mpos + 1: rpos]
+                rode = [_find(w, L.RIDE_WORDS) for w in between]
+                passive = "by" in between and any(rode)
+                inside = "with" in between and set(lows[rpos + 1: rpos + 3]) & L.INSIDE_WORDS
+                carrying = any(w.startswith("carr") for w in between)
+                if len(between) > 6 or not (passive or inside or carrying) \
+                        or others_between(mpos, rpos):
+                    continue
+                verb_used = verb_used or ("move" if passive or carrying else None)
+            rider["riding"] = mount["id"]
+            rider["action"] = "ride"
+            mount["carrying"] = True
+        if mount.get("carrying") and verb_used and verb_used != "sit":
+            model = L.MODELS[mount["kind"]]
+            if verb_used == "fly" and (mbase in L.FLYERS or mbase == "bird" or model.get("wings")):
+                mount["action"] = "fly"
+            elif mbase == "fish":
+                mount["action"] = "swim"
+            elif mount["action"] not in ("walk", "run", "fly"):
+                mount["action"] = "walk"
+
+    holding: dict[str, str] = {}
+    for kind in list(props):
+        ppos = prop_pos.get(kind, -1)
+        before = [a for a in reversed(placed) if 0 < ppos - a["pos"] <= 10]
+        holder = before[0] if before else None
+        if holder is not None and holder.get("carrying"):   # the rider holds it, not the horse
+            holder = next((a for a in placed if a.get("riding") == holder["id"]), holder)
+        if kind not in L.HOLDABLE or holder is None or holder["id"] in holding \
+                or base_of(holder) in L.VEHICLES or holder["action"] in ("die", "dead"):
+            continue
+        between = lows[holder["pos"] + 1: ppos]
+        if (set(between) & L.HOLD_PREPS
+                                  or any(_find(w, L.HOLD_WORDS) for w in between)):
+            holding[holder["id"]] = kind
+            props.remove(kind)
+
+    for kind in props:
+        ppos = prop_pos.get(kind, -1)
+        if kind not in L.SEATABLE or not set(lows[max(0, ppos - 3): ppos]) & L.INSIDE_WORDS:
+            continue
+        for actor in placed:
+            if 0 < ppos - actor["pos"] <= 10 and actor["action"] in L.STILL_ACTIONS \
+                    and not actor.get("riding") and not actor.get("on") \
+                    and base_of(actor) not in L.VEHICLES:
+                actor["on"] = kind
+
     # ---- where and when --------------------------------------------------
     models = [L.MODELS[a["kind"]] for a in cast]
     implied = next((m["implies"] for m in models if "implies" in m), None)
@@ -383,7 +490,8 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
     mood = moods.most_common(1)[0][0] if moods else "neutral"
     if cast:
         # Most recent first, so "they" can reach back past the last scene.
-        seen = [{k: a[k] for k in ("id", "kind", "name", "count")} for a in cast]
+        seen = [{"id": a["id"], "kind": a["kind"], "name": a["name"], "count": a["count"],
+                 "riding": a.get("riding")} for a in cast]
         ids = {a["id"] for a in seen}
         world.cast = (seen + [a for a in world.cast if a["id"] not in ids])[:5]
         world.last_size = len(seen)
@@ -444,8 +552,13 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
             {"id": a["id"], "kind": a["kind"], "name": a["name"],
              "count": min(a["count"], 5), "action": a["action"],
              "ambient": bool(a.get("ambient")),
-             "model": {k: v for k, v in L.MODELS[a["kind"]].items()
-                       if k not in ("default", "implies", "water")}}
+             "riding": a.get("riding"), "on": a.get("on"),
+             "holding": ({"kind": holding[a["id"]], "base": L.PROPS[holding[a["id"]]]["base"],
+                          "scale": L.HOLDABLE[holding[a["id"]]]}
+                         if a["id"] in holding else None),
+             "model": {**{k: v for k, v in L.MODELS[a["kind"]].items()
+                          if k not in ("default", "implies", "water")},
+                       **({"open": True} if a.get("carrying") else {})}}
             for a in cast[:6] + extras
         ],
         "props": [{"kind": p, **L.PROPS[p]} for p in props[:5]],

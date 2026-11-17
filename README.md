@@ -70,6 +70,15 @@ range from furniture and street fixtures to a ferris wheel, a piano and a
 birthday cake. Some words bring set dressing with them: a birthday adds a
 cake, balloons and presents; a beach adds a parasol and a sandcastle.
 
+Relationships between things are read too:
+
+- **Riding:** "a dog riding in a car", "the knight rode a horse", "a girl on a
+  bicycle", "a wizard flew on a dragon". The rider is seated in or on the
+  vehicle or animal and moves with it, and stays aboard in later scenes.
+- **Holding:** "a girl carried a basket", "a dog with a bone", "the king held
+  a sword". The object goes in the hand (or mouth).
+- **Using furniture:** "they sat on a bench", "the king slept in the bed".
+
 Killing verbs are tracked: "the pirate slew the dragon" ends with the dragon
 down, and it stays out of later scenes.
 

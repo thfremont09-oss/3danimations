@@ -303,7 +303,9 @@ function buildQuad(o) {
     breath.visible = false;
     g.add(breath);
   }
-  g.userData = { breath, legs, tail, wings, quad: true, height: hy + W * 0.6, sink: H * 0.85 };
+  g.userData = { breath, legs, tail, wings, head, quad: true, height: hy + W * 0.6, sink: H * 0.85,
+    mouth: [0, -W * 0.12, W * 0.74],
+    seats: [[0, by + br * 0.8, L * 0.08, 'straddle'], [0, by + br * 0.8, -L * 0.28, 'straddle']] };
   return g;
 }
 
@@ -388,7 +390,9 @@ function wheel(g, list, x, z, r = 0.27, w = 0.2, tyreColor = '#17171b') {
   p.add(tyre, hub, mesh(box(w * 1.1, r * 1.5, r * 0.16), mat('#6d727a')));
   list.push(p);
 }
-const glass = () => mat('#9fc4dc', { roughness: 0.08, metalness: 0.4 });
+// Occupied vehicles get see-through glass so the riders are visible.
+const glass = (clear) => mat('#9fc4dc', clear ? { roughness: 0.08, metalness: 0.2, transparent: true, opacity: 0.28, depthWrite: false }
+  : { roughness: 0.08, metalness: 0.4 });
 function carLights(g, w, y, zf, zb) {
   for (const s of [-1, 1]) {
     g.add(mesh(box(0.22, 0.12, 0.06), glow('#fff3b0', 1.2), s * w, y, zf));
@@ -403,19 +407,26 @@ function buildCar(o, id) {
   g.add(mesh(box(1.2, 0.42, 2.6), paint, 0, 0.55, 0));
   const cl = van ? 2.0 : v === 'pickup' ? 0.9 : 1.3, cz = van ? -0.25 : v === 'pickup' ? 0.25 : -0.15;
   const ch = van ? 0.62 : 0.42, top = 0.76 + ch;
-  g.add(mesh(box(1.1, ch, cl), paint, 0, 0.76 + ch / 2, cz));
-  g.add(mesh(box(1.12, ch * 0.6, cl * 0.82), glass(), 0, 0.8 + ch / 2, cz));
-  g.add(mesh(box(0.96, ch * 0.6, cl + 0.03), glass(), 0, 0.8 + ch / 2, cz));
+  if (o.open) {                                   // open top: windscreen and seat backs only
+    put(g, mesh(box(1.05, 0.5, 0.05), glass(true), 0, 1.0, cz + cl / 2 + 0.1)).rotation.x = -0.3;
+    g.add(mesh(box(1.05, 0.06, 0.05), paint, 0, 1.24, cz + cl / 2 + 0.03));
+    g.add(mesh(box(1.0, 0.42, 0.12), mat('#3a2a22'), 0, 0.95, cz - cl / 2 + 0.05));
+  } else {
+    g.add(mesh(box(1.1, ch, cl), paint, 0, 0.76 + ch / 2, cz));
+    g.add(mesh(box(1.12, ch * 0.6, cl * 0.82), glass(), 0, 0.8 + ch / 2, cz));
+    g.add(mesh(box(0.96, ch * 0.6, cl + 0.03), glass(), 0, 0.8 + ch / 2, cz));
+  }
   if (v === 'pickup') {
     g.add(mesh(box(1.2, 0.25, 0.06), paint, 0, 0.88, -1.27));
     for (const s of [-1, 1]) g.add(mesh(box(0.06, 0.25, 1.05), paint, s * 0.57, 0.88, -0.75));
   }
   for (const z of [1.32, -1.32]) g.add(mesh(box(1.24, 0.12, 0.08), mat('#2b2e35'), 0, 0.4, z));
   carLights(g, 0.42, 0.6, 1.31, -1.31);
-  if (v === 'taxi') g.add(mesh(box(0.34, 0.13, 0.16), glow('#ffd43b', 1.2), 0, top + 0.07, cz));
+  if (v === 'taxi' && !o.open) g.add(mesh(box(0.34, 0.13, 0.16), glow('#ffd43b', 1.2), 0, top + 0.07, cz));
   if (v === 'police' || v === 'ambulance') {
-    g.add(mesh(box(0.26, 0.1, 0.14), glow('#e03131', 2), -0.15, top + 0.05, cz));
-    g.add(mesh(box(0.26, 0.1, 0.14), glow('#1c7ed6', 2), 0.15, top + 0.05, cz));
+    const ly = o.open ? 0.82 : top + 0.05, lz = o.open ? -1.0 : cz;
+    g.add(mesh(box(0.26, 0.1, 0.14), glow('#e03131', 2), -0.15, ly, lz));
+    g.add(mesh(box(0.26, 0.1, 0.14), glow('#1c7ed6', 2), 0.15, ly, lz));
     g.add(mesh(box(1.22, 0.1, 2.0), mat(v === 'police' ? '#1f3a6e' : '#e03131'), 0, 0.62, 0));
   }
   for (const sx of [-1, 1]) for (const sz of [-1, 1]) wheel(g, wheels, sx * 0.6, sz * 0.85);
@@ -427,9 +438,14 @@ function buildTruck(o, id) {
   const g = new THREE.Group(), fire = o.variant === 'fire', wheels = [];
   const paint = mat(o.color || PALETTE[hashStr(id) % PALETTE.length], { roughness: 0.35, metalness: 0.35 });
   g.add(mesh(box(1.3, 0.25, 4.8), mat('#2b2e35'), 0, 0.55, 0));
-  g.add(mesh(box(1.45, 1.15, 1.2), paint, 0, 1.25, 1.75));
-  g.add(mesh(box(1.3, 0.45, 0.06), glass(), 0, 1.5, 2.36));
-  g.add(mesh(box(1.47, 0.42, 0.7), glass(), 0, 1.5, 1.85));
+  if (o.open) {
+    g.add(mesh(box(1.45, 0.55, 1.2), paint, 0, 0.95, 1.75), mesh(box(1.45, 0.08, 1.2), paint, 0, 1.8, 1.75));
+    g.add(mesh(box(1.45, 0.56, 0.08), paint, 0, 1.5, 1.19), mesh(box(1.4, 0.52, 1.1), glass(true), 0, 1.5, 1.78));
+  } else {
+    g.add(mesh(box(1.45, 1.15, 1.2), paint, 0, 1.25, 1.75));
+    g.add(mesh(box(1.3, 0.45, 0.06), glass(), 0, 1.5, 2.36));
+    g.add(mesh(box(1.47, 0.42, 0.7), glass(), 0, 1.5, 1.85));
+  }
   if (fire) {
     g.add(mesh(box(1.45, 0.9, 3.3), paint, 0, 1.13, -0.65));
     for (const s of [-1, 1]) g.add(mesh(box(0.06, 0.06, 3.4), mat('#d9dee6', { metalness: 0.8, roughness: 0.3 }), s * 0.3, 1.75, -0.6));
@@ -448,9 +464,15 @@ function buildTruck(o, id) {
 function buildBus(o) {
   const g = new THREE.Group(), wheels = [];
   const paint = mat(o.color || '#f2b632', { roughness: 0.35, metalness: 0.3 });
-  g.add(mesh(box(1.55, 1.6, 5.6), paint, 0, 1.2, 0));
-  g.add(mesh(box(1.57, 0.52, 5.0), glass(), 0, 1.52, -0.1));
-  g.add(mesh(box(1.4, 0.7, 0.06), glass(), 0, 1.45, 2.8));
+  if (o.open) {
+    g.add(mesh(box(1.55, 0.75, 5.6), paint, 0, 0.78, 0), mesh(box(1.55, 0.12, 5.6), paint, 0, 1.94, 0));
+    g.add(mesh(box(1.5, 0.75, 5.5), glass(true), 0, 1.52, 0));
+    for (const z of [-2.75, -0.9, 0.9, 2.75]) for (const sx of [-1, 1]) g.add(mesh(box(0.08, 0.75, 0.08), paint, sx * 0.73, 1.52, z));
+  } else {
+    g.add(mesh(box(1.55, 1.6, 5.6), paint, 0, 1.2, 0));
+    g.add(mesh(box(1.57, 0.52, 5.0), glass(), 0, 1.52, -0.1));
+    g.add(mesh(box(1.4, 0.7, 0.06), glass(), 0, 1.45, 2.8));
+  }
   g.add(mesh(box(0.06, 1.1, 0.7), mat('#2b2e35'), 0.78, 0.98, 2.0));
   g.add(mesh(box(1.57, 0.12, 5.6), mat('#2b2e35'), 0, 0.5, 0));
   carLights(g, 0.55, 0.75, 2.81, -2.81);
@@ -459,7 +481,7 @@ function buildBus(o) {
   return g;
 }
 
-function buildTrain() {
+function buildTrain(o) {
   const outer = new THREE.Group(), g = new THREE.Group(), wheels = [], smoke = [];
   g.position.z = 3.2;
   outer.add(g);
@@ -467,8 +489,13 @@ function buildTrain() {
   const boiler = mesh(cyl(0.6, 0.6, 2.3, 18), black, 0, 1.15, 1.2);
   boiler.rotation.x = Math.PI / 2;
   g.add(boiler);
-  g.add(mesh(box(1.35, 1.5, 1.2), red, 0, 1.3, -0.5));
-  g.add(mesh(box(1.37, 0.45, 0.7), glass(), 0, 1.65, -0.5));
+  if (o.open) {
+    g.add(mesh(box(1.35, 0.75, 1.2), red, 0, 0.93, -0.5), mesh(box(1.3, 0.75, 1.15), glass(true), 0, 1.68, -0.5));
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) g.add(mesh(box(0.08, 0.75, 0.08), red, sx * 0.63, 1.68, -0.5 + sz * 0.56));
+  } else {
+    g.add(mesh(box(1.35, 1.5, 1.2), red, 0, 1.3, -0.5));
+    g.add(mesh(box(1.37, 0.45, 0.7), glass(), 0, 1.65, -0.5));
+  }
   g.add(mesh(box(1.5, 0.1, 1.4), black, 0, 2.1, -0.5));
   g.add(mesh(cyl(0.2, 0.15, 0.6, 12), black, 0, 2.0, 1.8));
   g.add(mesh(ball(0.2), mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), 0, 1.85, 1.0));
@@ -521,6 +548,7 @@ function buildBike(o, id) {
     g.add(mesh(ball(0.09), glow('#fff3b0', 1.2), 0, 0.9, 0.72));
   }
   const rider = buildPerson(o.rider || {}, id + 'rider');      // someone has to ride it
+  rider.visible = !o.open;                                    // unless the story names the rider
   rider.position.set(0, 0.16, -0.3);
   rider.rotation.x = 0.22;
   rider.userData.legs.forEach((leg, i) => { leg.rotation.x = -0.9; leg.rotation.z = (i ? 1 : -1) * 0.12; });
@@ -535,7 +563,7 @@ function buildTractor(o) {
   const paint = mat(o.color || '#2f9e44', { roughness: 0.45 });
   g.add(mesh(box(0.9, 0.6, 1.5), paint, 0, 1.05, 0.55));
   g.add(mesh(box(1.0, 0.5, 1.1), paint, 0, 0.95, -0.5));
-  g.add(mesh(box(1.0, 0.95, 0.95), glass(), 0, 1.65, -0.5));
+  g.add(mesh(box(1.0, 0.95, 0.95), glass(o.open), 0, 1.65, -0.5));
   g.add(mesh(box(1.1, 0.08, 1.05), paint, 0, 2.15, -0.5));
   for (const sx of [-1, 1]) for (const sz of [-1, 1]) g.add(mesh(box(0.07, 0.95, 0.07), mat('#2b2e35'), sx * 0.48, 1.65, -0.5 + sz * 0.45));
   g.add(mesh(cyl(0.05, 0.05, 0.8, 8), mat('#2b2e35'), 0.3, 1.7, 0.9));
@@ -554,7 +582,7 @@ function buildHeli(o, id) {
   const body = mesh(ball(0.75), paint, 0, 1.2, 0);
   body.scale.set(0.9, 0.95, 1.5);
   g.add(body);
-  const nose = mesh(ball(0.62), glass(), 0, 1.25, 0.55);
+  const nose = mesh(ball(0.62), glass(o.open), 0, 1.25, 0.55);
   nose.scale.set(0.85, 0.85, 1);
   g.add(nose);
   const boom = mesh(cyl(0.1, 0.2, 2.6, 12), paint, 0, 1.35, -2.0);
@@ -724,6 +752,32 @@ const DUEL_END = 0.62;    // fraction of the scene at which a fight to the death
 const FOOTPRINT = { boat: 4.2, car: 3.4, rocket: 2.6, plane: 4.2, ufo: 3.2, balloon: 3.6, truck: 6, bus: 6.6,
   train: 12.5, bike: 2.4, tractor: 3.6, heli: 5, ship: 12, tank: 4.2, sled: 3.2, cart: 3.6 };
 const WATER_BASES = new Set(['fish', 'boat', 'ship']);
+// Where riders go: [x, y, z, pose] in the vehicle's own space. y is hip height for
+// 'sit' and 'straddle', foot height for 'stand'.
+const SEATS = {
+  car: [[-0.27, 0.72, -0.15, 'sit'], [0.27, 0.72, -0.15, 'sit'], [0, 0.72, -0.8, 'sit']],
+  truck: [[-0.33, 1.15, 1.7, 'sit'], [0.33, 1.15, 1.7, 'sit']],
+  bus: [[-0.4, 1.2, 2.0, 'sit'], [0.4, 1.2, 0.9, 'sit'], [-0.4, 1.2, -0.2, 'sit'], [0.4, 1.2, -1.3, 'sit']],
+  train: [[0, 1.25, 2.7, 'sit']],
+  bike: [[0, 0.98, -0.3, 'straddle']],
+  tractor: [[0, 1.3, -0.5, 'sit']],
+  heli: [[0, 0.95, 0.35, 'sit']],
+  plane: [[0, 0.5, -0.1, 'sit']],
+  ship: [[0, 1.0, 3.3, 'stand'], [0.6, 1.0, 2.5, 'stand'], [-0.6, 1.0, 2.5, 'stand']],
+  boat: [[0, 0.55, -0.7, 'sit'], [0, 0.55, 0.7, 'sit']],
+  tank: [[0, 0.95, -0.2, 'stand']],
+  sled: [[0, 0.95, -0.2, 'sit'], [0, 0.95, 0.45, 'sit']],
+  cart: [[0, 1.0, 0.4, 'sit'], [0, 1.0, -0.5, 'sit']],
+  balloon: [[0, 0.1, 0, 'stand']],
+  ufo: [[0, 0.75, 0, 'sit']],
+  rocket: [[0, 1.6, 0, 'sit']],
+  bird: [[0, 0.5, -0.05, 'straddle']],
+  fish: [[0, 0.28, 0, 'straddle']],
+};
+const SNUG = new Set(['truck', 'bus', 'train', 'tractor', 'heli', 'rocket', 'ufo']);   // riders shrink to fit the cab
+// Furniture people can use: [pose, height].
+const PERCH = { bench: ['sit', 0.55], sofa: ['sit', 0.6], rock: ['sit', 1.0], haystack: ['sit', 1.25],
+  barrel: ['sit', 0.92], bed: ['lie', 0.68], bathtub: ['sit', 0.35], bridge: ['stand', 1.12], table: ['stand', 0.88] };
 
 function makeActor(spec, n, stage) {
   const o = spec.model, base = o.base in BUILDERS ? o.base : 'person';
@@ -740,7 +794,15 @@ function makeActor(spec, n, stage) {
     label.position.y = ud.height * s + 0.45;
     wrap.add(label);
   }
-  if (FIGHTING.has(spec.action) && ud.arms) {      // fighters on two legs carry a blade
+  const item = spec.holding, held = item && stage && PROP_BUILDERS[item.base];
+  if (item && item.kind !== 'sword' && held) {     // something carried in a hand or a mouth
+    const thing = held(stage.R, stage.night, item.base === 'beachball' ? [] : stage.anims, true);
+    thing.scale.setScalar(item.scale / (ud.arms ? 1 : Math.max(0.6, s)));
+    if (ud.arms) { thing.position.set(0, -0.64, 0.1); ud.arms[1].add(thing); }
+    else if (ud.head && ud.mouth) { thing.position.set(...ud.mouth); ud.head.add(thing); }
+    else { thing.position.set(0, ud.height, 0); g.add(thing); }
+  }
+  if ((FIGHTING.has(spec.action) || (item && item.kind === 'sword')) && ud.arms) {      // fighters on two legs carry a blade
     const steel = mat('#d9dee6', { metalness: 0.85, roughness: 0.25 });
     const blade = mesh(box(0.05, 0.05, 0.95), steel, 0, -0.62, 0.5);
     blade.add(mesh(box(0.3, 0.06, 0.06), mat('#6b4a2b'), 0, 0, -0.42));
@@ -761,10 +823,51 @@ function makeActor(spec, n, stage) {
     ambient: !!spec.ambient, base,
     moving: act === 'walk' || act === 'run' || act === 'swim',
     x0: 0, z0: 0, y0: 0, facing: 0, duel: false, action: act,
+    id: spec.id, riding: spec.riding, on: spec.on, mount: null, seat: null, perch: null, riders: 0,
+    seats: ud.seats || SEATS[base] || [[0, ud.height * 0.6, 0, 'sit']], heading: 0, lift: 0,
   };
 
+  const hip = ud.quad ? (o.leg || 0.5) : ud.legs && ud.legs.length ? 0.8 : 0.25;   // seat-to-feet distance
+  function ride(t) {                         // sit in or on the mount and go where it goes
+    const m = actor.mount, [sx0, sy, sz0, pose] = actor.seat;
+    const k = SNUG.has(m.base) ? 0.68 : 1, mh = m.heading;
+    const sx = (ud.quad ? 0 : sx0) * m.scale, sz = sz0 * m.scale;   // four-legged riders take the middle
+    g.rotation.set(0, 0, 0);
+    g.position.set(0, 0, 0);
+    scaled.scale.setScalar(s * k);
+    scaled.rotation.y = mh;
+    wrap.position.set(
+      m.wrap.position.x + sx * Math.cos(mh) + sz * Math.sin(mh),
+      m.wrap.position.y + m.lift + sy * m.scale - (pose === 'stand' ? 0 : hip * s * k),
+      m.wrap.position.z - sx * Math.sin(mh) + sz * Math.cos(mh));
+    if (ud.legs && !ud.quad) {
+      ud.legs.forEach((leg, i) => {
+        leg.rotation.x = pose === 'stand' ? 0 : pose === 'straddle' ? -0.35 : -1.45;
+        leg.rotation.z = pose === 'straddle' ? (i ? 1 : -1) * 0.5 : 0;
+      });
+    }
+    if (ud.arms) {
+      ud.arms.forEach((arm, i) => {
+        arm.rotation.x = pose === 'stand' ? 0 : -1.05;
+        arm.rotation.z = arm.userData.side * 0.12;
+        if (act === 'wave' && i) arm.rotation.set(0, 0, arm.userData.side * (2.4 + Math.sin(t * 9) * 0.35));
+      });
+    }
+    if (ud.tail) ud.tail.rotation.y = Math.sin(t * 6 + ph) * 0.4;
+    if (ud.head) ud.head.rotation.set(0, Math.sin(t * 0.8 + ph) * 0.3, 0);
+    if (ud.wings) ud.wings.forEach((w) => { w.rotation.z = -w.userData.side * 0.5; });
+    actor.focus.copy(m.focus);
+  }
+
   actor.update = (t, dur) => {
+    if (actor.mount) { ride(t); return; }
     let x = actor.x0, y = actor.y0, z = actor.z0, heading = actor.facing;
+    let sitting = false;
+    if (actor.perch && !actor.moving) {      // on a bench, a bed, a bridge...
+      const [pose, h] = actor.perch;
+      sitting = pose === 'sit' && !ud.quad && ud.legs && ud.legs.length > 0;
+      y += sitting ? h - hip * s : h;
+    }
     let swing = 0, armsUp = 0, flap = 0, focusY = null;
     const held = [false, false];             // arms posed by the action itself
     if (ud.breath) ud.breath.visible = false;
@@ -922,6 +1025,7 @@ function makeActor(spec, n, stage) {
         leg.rotation.x = swing * (ud.quad ? pair[i] : i ? -1 : 1);
       });
     }
+    if (sitting) ud.legs.forEach((leg) => { leg.rotation.x = -1.45; });
     if (ud.arms) {
       ud.arms.forEach((arm, i) => {
         if (act === 'talk' && arm.rotation.x < -0.5 && i === 0) return;
@@ -937,6 +1041,8 @@ function makeActor(spec, n, stage) {
 
     wrap.position.set(x, y, z);
     scaled.rotation.y = heading;
+    actor.heading = heading;
+    actor.lift = g.position.y;
     if (focusY === null) actor.focus.set(x, Math.max(0.5, y + ud.height * s * 0.55), z);
     else actor.focus.set(x * 0.55, focusY, z * 0.55);
   };
@@ -1361,7 +1467,7 @@ function kite(R, night, anims) {
   });
   return g;
 }
-function umbrella(R) {
+function umbrella(R, night, anims, held) {
   const g = new THREE.Group(), c = BRIGHT[Math.floor(R() * 7)];
   g.add(mesh(cyl(0.04, 0.04, 2.3, 8), mat('#e9e9e9'), 0, 1.15, 0));
   for (let i = 0; i < 8; i++) {
@@ -1369,9 +1475,10 @@ function umbrella(R) {
       mat(i % 2 ? '#f7f3e8' : c, { side: THREE.DoubleSide }), 0, 2.35, 0);
     g.add(seg);
   }
-  const towel = mesh(box(0.9, 0.03, 1.9), mat(BRIGHT[Math.floor(R() * 7)]), 1.4, 0.03, 0.3);
-  g.add(towel);
-  g.rotation.z = 0.08;
+  if (!held) {
+    g.add(mesh(box(0.9, 0.03, 1.9), mat(BRIGHT[Math.floor(R() * 7)]), 1.4, 0.03, 0.3));
+    g.rotation.z = 0.08;
+  }
   return g;
 }
 function books(R) {
@@ -1705,13 +1812,14 @@ function drums() {
   }
   return g;
 }
-function guitar(R) {
+function guitar(R, night, anims, held) {
   const g = new THREE.Group(), wood = mat('#c98b4a', { roughness: 0.35 });
   const a = mesh(ball(0.3), wood, 0, 0.35, 0), b = mesh(ball(0.23), wood, 0, 0.72, 0);
   a.scale.z = b.scale.z = 0.3;
   g.add(a, b, mesh(ball(0.08), mat('#2b1d0e'), 0, 0.55, 0.08));
   g.add(mesh(box(0.08, 0.85, 0.04), mat('#4a3120'), 0, 1.3, 0.02), mesh(box(0.12, 0.2, 0.05), mat('#4a3120'), 0, 1.8, 0.02));
   g.rotation.set(-0.2, 0, 0.15);
+  if (held) return g;
   const amp = mesh(box(0.7, 0.7, 0.4), mat('#24272d'), 0.9, 0.35, -0.2);
   const wrap = new THREE.Group();
   wrap.add(g, amp, mesh(cyl(0.22, 0.22, 0.02, 16), mat('#6d727a'), 0.9, 0.38, 0.01));
@@ -2048,10 +2156,24 @@ function buildWorldShot(sc, idx) {
   // cast
   const actors = [];
   sc.actors.forEach((spec) => {
-    for (let i = 0; i < spec.count; i++) actors.push(makeActor({ ...spec, name: i ? null : spec.name }, actors.length, null));
+    for (let i = 0; i < spec.count; i++) actors.push(makeActor({ ...spec, name: i ? null : spec.name }, actors.length, { R, night, anims }));
   });
+  // Riders are attached to whatever they ride and take no place of their own on stage.
+  actors.forEach((a) => {
+    const m = a.riding && actors.find((b) => b.id === a.riding && b !== a && !b.riding);
+    if (!m) return;
+    const seat = m.seats[Math.min(m.riders, m.seats.length - 1)];
+    const extra = Math.max(0, m.riders - m.seats.length + 1);
+    a.seat = [seat[0], seat[1], seat[2] - extra * 0.55, seat[3]];
+    a.mount = m;
+    a.aquatic = m.aquatic;
+    a.flying = m.flying;
+    m.riders += 1;
+  });
+  actors.sort((a, b) => (a.mount ? 1 : 0) - (b.mount ? 1 : 0));    // mounts move first
   // Ambient actors are background life: never on the stage mark, never followed by the camera.
-  const cast = actors.filter((a) => !a.ambient), extras = actors.filter((a) => a.ambient);
+  const riders = actors.filter((a) => a.mount);
+  const cast = actors.filter((a) => !a.ambient && !a.mount), extras = actors.filter((a) => a.ambient && !a.mount);
   const landActors = actors.filter((a) => !a.aquatic && !(a.ambient && a.flying));
   const centreIsland = water && (landActors.length > 0 || sc.props.length > 0);
 
@@ -2234,10 +2356,12 @@ function buildWorldShot(sc, idx) {
   if (sc.weather === 'snow') precipitation(R, 'snow', anims, root);
 
   // props sit in an arc behind the stage
+  const propObjects = {};
   sc.props.forEach((p, i) => {
     const build = PROP_BUILDERS[p.base];
     if (!build) return;
     const obj = add(build(R, night, anims));
+    propObjects[p.kind] = obj;
     // In 2D a prop straight behind the cast would hide behind them, so the arc starts off-centre.
     const a = -Math.PI / 2 + (i - (sc.props.length - 1) / 2) * 0.75 + (FLAT ? 0.6 : 0);
     const pr = centreIsland ? Math.min(p.r, 8.5) : p.r;
@@ -2273,6 +2397,16 @@ function buildWorldShot(sc, idx) {
     }
     root.add(a.wrap);
   });
+  riders.forEach((a) => root.add(a.wrap));
+  // Furniture comes to whoever is using it.
+  Object.keys(PERCH).forEach((kind) => {
+    const users = cast.filter((a) => a.on === kind && !a.moving), obj = propObjects[kind];
+    if (!users.length || !obj) return;
+    const cx = users.reduce((sum, a) => sum + a.x0, 0) / users.length, lie = PERCH[kind][0] === 'lie';
+    obj.position.set(lie ? cx - 0.9 : cx, 0, kind === 'barrel' ? -0.4 : 0);
+    obj.rotation.y = lie ? Math.PI / 2 : 0;
+    users.forEach((a) => { a.perch = PERCH[kind]; a.z0 = lie ? 0 : 0.06; a.seated = true; });
+  });
   const fighters = cast.filter((a) => FIGHTING.has(a.action));
   const duel = fighters.length > 1;
   fighters.forEach((a) => { a.duel = duel; });
@@ -2293,7 +2427,7 @@ function buildWorldShot(sc, idx) {
   const mid = (cast.length - 1) / 2;
   // Duellists stand a stride apart so their lunges meet in the middle.
   if (duel) cast.forEach((a, j) => { a.x0 += (j <= mid ? -1 : 1) * (0.9 + (a.base === 'quad' ? a.width * 0.2 : 0)); });
-  cast.forEach((a, j) => { a.facing = facing ? (j <= mid ? Math.PI / 2 : -Math.PI / 2) : (j - mid) * -0.12; });
+  cast.forEach((a, j) => { if (a.seated) { a.facing = 0; return; } a.facing = facing ? (j <= mid ? Math.PI / 2 : -Math.PI / 2) : (j - mid) * -0.12; });
 
   const biggest = cast.reduce((m, a) => Math.max(m, a.scale), 1);
   // The camera follows the grounded cast when there is one, otherwise whoever is on screen.

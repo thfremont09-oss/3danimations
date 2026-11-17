@@ -336,7 +336,7 @@ ACTOR_WORDS = _words({
         "plane airplane aeroplane aircraft jet helicopter airliner biplane "
         "glider chopper",
     "balloon":
-        "balloon blimp airship zeppelin",
+        "blimp airship zeppelin",
 })
 
 # word -> (kind, how many to draw)
@@ -635,6 +635,41 @@ REVIVE_WORDS = {"revive", "revived", "resurrect", "resurrected", "reborn", "aliv
 PASSIVE_MARKERS = {"was", "were", "is", "are", "been", "be", "got", "being"}
 OBJECT_PRONOUNS = {"it", "him", "her", "them"}
 
+# ---- relationships between things -----------------------------------------
+# "a dog riding in a car", "the knight rode a horse", "a girl on a bicycle"
+RIDE_WORDS = _words({
+    "move": "ride drive sail pilot steer row paddle travel cruise commute pedal race "
+            "journey board gallop cycle",
+    "fly": "fly soar glide",
+    "sit": "sit seat perch",
+})
+RIDE_ANIMAL_VERBS = {"ride", "gallop", "sit", "seat", "perch", "fly", "soar", "glide"}
+# A preposition right before the vehicle is enough: "a dog in a car".
+INSIDE_WORDS = {"in", "on", "inside", "into", "onto", "aboard", "atop", "upon", "astride"}
+ONTOP_WORDS = {"on", "onto", "atop", "upon", "astride"}
+# ...but these between the verb and the vehicle mean it is not being ridden:
+# "the knight rode past the dragon".
+RIDE_BLOCKERS = {"past", "to", "toward", "towards", "after", "behind", "from", "near",
+                 "by", "beside", "with", "around", "over", "under", "through", "across",
+                 "away", "and", "then", "while", "before", "until", "at"}
+
+# "a girl carried a basket", "a dog with a bone": kind -> size in the hand
+HOLDABLE = {"ball": 0.5, "book": 0.6, "gift": 0.4, "basket": 0.55, "lamp": 0.4,
+            "balloons": 0.6, "bone": 1.0, "flower": 0.8, "crystal": 0.35,
+            "pumpkin": 0.5, "mushroom": 0.4, "umbrella": 0.6, "guitar": 0.55,
+            "sword": 1.0, "chest": 0.35, "telescope": 0.5, "surfboard": 0.7}
+HOLD_WORDS = _words({
+    "hold": "carry hold bring lift grab clutch take pick catch fetch wield raise throw "
+            "play read find steal give swing wave strum wear own have",
+})
+HOLD_PREPS = {"with", "holding", "carrying"}
+
+# "a boy sat on a bench", "she slept in the bed": kind -> (pose, height)
+SEATABLE = {"bench": ("sit", 0.55), "sofa": ("sit", 0.6), "rock": ("sit", 1.0),
+            "haystack": ("sit", 1.25), "barrel": ("sit", 0.92), "bed": ("lie", 0.68),
+            "bathtub": ("sit", 0.35), "bridge": ("stand", 1.12), "table": ("stand", 0.88)}
+STILL_ACTIONS = {"idle", "sleep", "talk", "look", "wave", "dance", "jump", "work", "dead"}
+
 FLYERS = {"rocket", "plane", "balloon", "ufo", "heli"}
 PHYSICAL_ACTIONS = {"walk", "run", "fly", "jump", "dance", "swim", "sleep", "fall", "fight",
                     "wave", "work", "slay", "die"}
@@ -667,6 +702,8 @@ MOOD_WORDS = _words({
 })
 
 IRREGULAR = {
+    "ridden": "ride", "driven": "drive", "held": "hold", "brought": "bring", "took": "take",
+    "caught": "catch", "threw": "throw", "had": "have", "has": "have",
     "slew": "slay", "slain": "slay", "ran": "run", "flew": "fly", "flown": "fly", "swam": "swim", "swum": "swim",
     "fell": "fall", "fallen": "fall", "slept": "sleep", "sang": "sing", "sung": "sing",
     "went": "go", "gone": "go", "came": "come", "fought": "fight", "rode": "ride",
@@ -682,7 +719,7 @@ IRREGULAR = {
 IRREGULAR_PLURALS = {"wolves", "men", "women", "mice", "geese", "fairies", "cattle"}
 
 # Words that look like a vocabulary hit after stemming but are not.
-IGNORE = {"hoped", "hoping", "hope's", "was", "has", "his", "its", "this", "as", "us",
+IGNORE = {"hoped", "hoping", "hope's", "was", "his", "its", "this", "as", "us",
           "does", "goes", "going", "set", "bass", "boxing", "moved", "still", "left",
           "like", "liked", "can", "may", "might", "will", "well", "back", "even",
           "passed", "past", "kind", "present", "second", "fine", "being"}
@@ -1001,7 +1038,7 @@ PROP_WORDS.update(_words({
     "computer": "computer laptop monitor pc desktop tablet screen office",
     "phonebooth": "payphone telephone",
     "busstop": "busstop",
-    "balloons": "balloons confetti streamers decorations",
+    "balloons": "balloon balloons confetti streamers decorations",
     "bone": "bone bones fossil",
     "shield": "shield armor armour armory armoury",
     "table": "table desk feast banquet altar dinner supper lunch breakfast meal buffet",

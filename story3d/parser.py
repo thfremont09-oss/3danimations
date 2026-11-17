@@ -68,7 +68,7 @@ def _find(word: str, table: dict):
 
 
 def _known(word: str) -> bool:
-    return any(
+    return word in L.PLACE_DRESSING or any(
         _find(word, t)
         for t in (L.ACTOR_WORDS, L.PROP_WORDS, L.SETTING_WORDS, L.TIME_WORDS,
                   L.WEATHER_WORDS, L.ACTION_WORDS, L.MOOD_WORDS, L.COLLECTIVES)
@@ -252,8 +252,11 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
     def act_for(kind: str, pos: int) -> str:
         model = L.MODELS[kind]
         action = _pick_action(pos, actions, model.get("default", "idle"))
-        if model["base"] in L.VEHICLES and action not in ("walk", "run", "fly"):
-            return "idle"
+        if model["base"] in L.VEHICLES:
+            # Vehicles only drive, fly or stand still, whatever the nearby verb says.
+            if action in ("walk", "run") or (action == "fly" and model["base"] in L.FLYERS):
+                return action
+            return "idle" if action in ("idle", "sleep", "look") else model.get("default", "idle")
         return action
 
     cast: list[dict] = []

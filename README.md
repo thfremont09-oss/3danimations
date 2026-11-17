@@ -49,10 +49,11 @@ The parser (`story3d/parser.py`) is rule-based and looks words up in
 | It looks for | Examples | Effect |
 | --- | --- | --- |
 | Characters | fox, knight, robot, dragon, "Tomas" | actors on stage; capitalised names get a label |
+| Vehicles | taxi, train, bicycle, helicopter, ship | drive, sail or fly across the scene |
 | Actions | walked, ran, flew, danced, slept, fought | how each actor moves |
 | Places | forest, beach, city, desert, mountains, space | the set |
 | Time and weather | night, dawn, sunset, rain, storm, snow, fog | sky, light, particles |
-| Props | castle, lighthouse, campfire, treasure, lantern | set pieces behind the cast |
+| Objects | castle, lighthouse, campfire, piano, mailbox, kite | set pieces behind the cast |
 | Mood | happy, afraid, lonely, strange | colour grade and camera |
 
 Place, time, weather and cast carry over from scene to scene, and pronouns
@@ -61,8 +62,16 @@ Place, time, weather and cast carry over from scene to scene, and pronouns
 sentence names two places ("a village by the sea"), the water wins and the
 other becomes scenery.
 
-The vocabulary is about 1,800 words covering 93 kinds of character, animal
-and vehicle and 31 props.
+The vocabulary is about 2,100 words covering 114 kinds of character,
+animal and vehicle and 78 objects. Vehicles include cars (taxi, police,
+ambulance, van, pickup), trucks, buses, a train, bicycles and motorcycles
+with riders, tractors, helicopters, ships, rowboats and speedboats. Objects
+range from furniture and street fixtures to a ferris wheel, a piano and a
+birthday cake. Some words bring set dressing with them: a birthday adds a
+cake, balloons and presents; a beach adds a parasol and a sandcastle.
+
+Killing verbs are tracked: "the pirate slew the dragon" ends with the dragon
+down, and it stays out of later scenes.
 
 It is a keyword reader, not a language model, so it only stages words it
 knows. To teach it more, add words to the tables in `story3d/lexicon.py`; new

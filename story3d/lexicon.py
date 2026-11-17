@@ -61,13 +61,13 @@ MODELS: dict[str, dict] = {
              "neck": 0.4, "ears": "up", "tail": 0.15, "horn": True},
     "sheep": {"base": "quad", "color": "#f1ede4", "len": 0.9, "leg": 0.35, "width": 0.55,
               "ears": "round", "tail": 0.12},
-    "cow": {"base": "quad", "color": "#efe9df", "len": 1.5, "leg": 0.6, "width": 0.65,
+    "cow": {"base": "quad", "pattern": "spots", "color": "#efe9df", "len": 1.5, "leg": 0.6, "width": 0.65,
             "ears": "round", "tail": 0.6},
     "pig": {"base": "quad", "color": "#f0a6a6", "len": 0.9, "leg": 0.25, "width": 0.5,
             "ears": "up", "tail": 0.15},
-    "lion": {"base": "quad", "color": "#d6a24a", "len": 1.4, "leg": 0.6, "width": 0.55,
+    "lion": {"base": "quad", "mane": True, "color": "#d6a24a", "len": 1.4, "leg": 0.6, "width": 0.55,
              "ears": "round", "tail": 0.8},
-    "tiger": {"base": "quad", "color": "#e8872b", "len": 1.4, "leg": 0.55, "width": 0.5,
+    "tiger": {"base": "quad", "pattern": "stripes", "ink": "#2a1a0a", "color": "#e8872b", "len": 1.4, "leg": 0.55, "width": 0.5,
               "ears": "round", "tail": 0.8},
     "elephant": {"base": "quad", "color": "#8c9099", "len": 2.2, "leg": 1.1, "width": 1.2,
                  "ears": "round", "tail": 0.5, "trunk": True},
@@ -101,7 +101,7 @@ MODELS: dict[str, dict] = {
     # vehicles
     "boat": {"base": "boat", "default": "walk", "water": True, "implies": "ocean",
              "speed": 1.3},
-    "car": {"base": "car", "speed": 3.0, "implies": "city"},
+    "car": {"base": "car", "speed": 3.0, "implies": "city", "default": "walk"},
     "rocket": {"base": "rocket", "default": "fly"},
     "plane": {"base": "plane", "default": "fly"},
 }
@@ -623,7 +623,8 @@ ACTION_WORDS = _words({
         "linger pause hesitate hide crouch guard eat drink write study learn "
         "mourn weep sob smile nod ",
 })
-VEHICLES = {"boat", "car", "rocket", "plane", "balloon", "ufo"}
+VEHICLES = {"boat", "car", "rocket", "plane", "balloon", "ufo", "truck", "bus", "train", "bike",
+            "tractor", "heli", "ship", "tank", "sled", "cart"}
 # Death. "kill" verbs take a victim ("the pirate slew the dragon"); "die" words
 # apply to their subject ("the king died").
 KILL_WORDS = _words({
@@ -634,6 +635,7 @@ REVIVE_WORDS = {"revive", "revived", "resurrect", "resurrected", "reborn", "aliv
 PASSIVE_MARKERS = {"was", "were", "is", "are", "been", "be", "got", "being"}
 OBJECT_PRONOUNS = {"it", "him", "her", "them"}
 
+FLYERS = {"rocket", "plane", "balloon", "ufo", "heli"}
 PHYSICAL_ACTIONS = {"walk", "run", "fly", "jump", "dance", "swim", "sleep", "fall", "fight",
                     "wave", "work", "slay", "die"}
 
@@ -739,7 +741,7 @@ MODELS.update({
     "scarecrow": {"base": "person", "hat": True, "color": "#b58a3c", "skin": "#e3c887"},
     "donkey": {"base": "quad", "color": "#8d8d8d", "len": 1.3, "leg": 0.7, "width": 0.45,
                "neck": 0.35, "ears": "long", "tail": 0.5},
-    "zebra": {"base": "quad", "color": "#e9e9ee", "len": 1.6, "leg": 0.9, "width": 0.5,
+    "zebra": {"base": "quad", "pattern": "stripes", "color": "#e9e9ee", "len": 1.6, "leg": 0.9, "width": 0.5,
               "neck": 0.5, "ears": "up", "tail": 0.6},
     "pegasus": {"base": "quad", "color": "#f7f7fb", "len": 1.7, "leg": 0.95, "width": 0.55,
                 "neck": 0.55, "ears": "up", "tail": 0.7, "wings": True, "default": "fly"},
@@ -755,7 +757,7 @@ MODELS.update({
               "neck": 0.8, "ears": "up", "tail": 0.15},
     "rhino": {"base": "quad", "color": "#7f858c", "len": 2.0, "leg": 0.7, "width": 1.0,
               "ears": "round", "tail": 0.3, "horn": True},
-    "giraffe": {"base": "quad", "color": "#e0b24a", "len": 1.5, "leg": 1.6, "width": 0.55,
+    "giraffe": {"base": "quad", "pattern": "spots", "ink": "#8a5a24", "color": "#e0b24a", "len": 1.5, "leg": 1.6, "width": 0.55,
                 "neck": 1.7, "ears": "round", "tail": 0.6},
     "squirrel": {"base": "quad", "color": "#b5651d", "len": 0.35, "leg": 0.12, "width": 0.2,
                  "ears": "up", "tail": 0.5},
@@ -839,3 +841,213 @@ AMBIENT["desert"] += [("crocodile", "walk", 1)]
 AMBIENT["mountain"] += [("goat", "idle", 3), ("balloon", "fly", 1)]
 AMBIENT["space"] += [("ufo", "fly", 1)]
 AMBIENT["city"] += [("balloon", "fly", 1)]
+
+
+# --------------------------------------------------------------------------
+# Vehicles and everyday objects
+# --------------------------------------------------------------------------
+MODELS.update({
+    "taxi": {"base": "car", "variant": "taxi", "color": "#f2c230", "speed": 3.0,
+             "implies": "city", "default": "walk"},
+    "policecar": {"base": "car", "variant": "police", "color": "#f4f4f4", "speed": 3.6,
+                  "implies": "city", "default": "walk"},
+    "ambulance": {"base": "car", "variant": "ambulance", "color": "#f4f4f4", "speed": 3.6,
+                  "implies": "city", "default": "walk"},
+    "van": {"base": "car", "variant": "van", "speed": 2.8, "default": "walk"},
+    "pickup": {"base": "car", "variant": "pickup", "speed": 2.8, "default": "walk"},
+    "racecar": {"base": "car", "color": "#e02020", "speed": 5.0, "default": "run"},
+    "truck": {"base": "truck", "speed": 2.6, "default": "walk"},
+    "firetruck": {"base": "truck", "variant": "fire", "color": "#d62828", "speed": 3.2,
+                  "implies": "city", "default": "walk"},
+    "bus": {"base": "bus", "speed": 2.4, "implies": "city", "default": "walk"},
+    "schoolbus": {"base": "bus", "color": "#f2b632", "speed": 2.2, "default": "walk"},
+    "train": {"base": "train", "speed": 3.0, "default": "walk"},
+    "bicycle": {"base": "bike", "speed": 2.0, "default": "walk"},
+    "motorcycle": {"base": "bike", "variant": "motor", "speed": 3.4, "default": "walk"},
+    "tractor": {"base": "tractor", "speed": 1.2, "implies": "village", "default": "walk"},
+    "helicopter": {"base": "heli", "default": "fly"},
+    "ship": {"base": "ship", "speed": 1.1, "default": "walk", "water": True, "implies": "ocean"},
+    "rowboat": {"base": "boat", "sail": False, "speed": 0.8, "default": "walk", "water": True,
+                "implies": "lake"},
+    "speedboat": {"base": "boat", "variant": "speed", "speed": 3.5, "default": "walk",
+                  "water": True, "implies": "ocean"},
+    "tank": {"base": "tank", "speed": 1.0, "default": "walk"},
+    "sled": {"base": "sled", "speed": 2.4, "implies": "snow", "default": "walk"},
+    "cart": {"base": "cart", "speed": 1.0, "default": "walk"},
+})
+
+ACTOR_WORDS.update(_words({
+    "car": "car automobile sedan motorcar limousine limo convertible hatchback coupe suv "
+           "jeep vehicle",
+    "taxi": "taxi cab taxicab",
+    "policecar": "cruiser squadcar",
+    "ambulance": "ambulance",
+    "van": "van minivan campervan camper caravan",
+    "pickup": "pickup",
+    "racecar": "racecar racer sportscar ferrari lamborghini porsche",
+    "truck": "truck lorry trailer tanker semi",
+    "firetruck": "firetruck",
+    "bus": "bus coach minibus trolley",
+    "schoolbus": "schoolbus",
+    "train": "train tram locomotive railway railroad metro express monorail",
+    "bicycle": "bicycle bike cyclist tricycle",
+    "motorcycle": "motorcycle motorbike scooter moped biker",
+    "tractor": "tractor bulldozer excavator digger harvester forklift",
+    "helicopter": "helicopter chopper copter drone",
+    "ship": "ship liner steamer freighter cruise battleship warship tugboat barge "
+            "frigate destroyer steamship",
+    "boat": "boat sailboat vessel yacht ferry galleon schooner catamaran sloop",
+    "rowboat": "rowboat canoe kayak raft dinghy lifeboat gondola",
+    "speedboat": "speedboat motorboat jetski",
+    "tank": "tank",
+    "sled": "sled sleigh sledge toboggan",
+    "cart": "cart wagon carriage chariot stagecoach rickshaw",
+}))
+
+PROPS.update({
+    "ball": {"base": "beachball", "r": 2.6},
+    "kite": {"base": "kite", "r": 5},
+    "umbrella": {"base": "umbrella", "r": 4},
+    "book": {"base": "books", "r": 2.4},
+    "bed": {"base": "bed", "r": 3.6},
+    "sofa": {"base": "sofa", "r": 3.4},
+    "tv": {"base": "tv", "r": 3.2},
+    "clock": {"base": "clock", "r": 3.4},
+    "door": {"base": "door", "r": 4},
+    "ladder": {"base": "ladder", "r": 3.6},
+    "mailbox": {"base": "mailbox", "r": 3.4},
+    "trashcan": {"base": "trashcan", "r": 3.2},
+    "trafficlight": {"base": "trafficlight", "r": 4.6},
+    "stopsign": {"base": "stopsign", "r": 4.4},
+    "hydrant": {"base": "hydrant", "r": 3},
+    "swing": {"base": "swing", "r": 6},
+    "slide": {"base": "slide", "r": 6},
+    "sandcastle": {"base": "sandcastle", "r": 3.2},
+    "surfboard": {"base": "surfboard", "r": 3.6},
+    "cannon": {"base": "cannon", "r": 3.6},
+    "ferriswheel": {"base": "ferriswheel", "r": 22},
+    "carousel": {"base": "carousel", "r": 10},
+    "telescope": {"base": "telescope", "r": 3},
+    "cake": {"base": "cake", "r": 2.6},
+    "gift": {"base": "gift", "r": 2.6},
+    "xmastree": {"base": "xmastree", "r": 5},
+    "basket": {"base": "basket", "r": 2.4},
+    "haystack": {"base": "haystack", "r": 5},
+    "beehive": {"base": "beehive", "r": 3.6},
+    "piano": {"base": "piano", "r": 3.4},
+    "drums": {"base": "drums", "r": 3.4},
+    "guitar": {"base": "guitar", "r": 2.8},
+    "easel": {"base": "easel", "r": 3},
+    "globe": {"base": "globe", "r": 2.8},
+    "trophy": {"base": "trophy", "r": 2.6},
+    "rainbow": {"base": "rainbow", "r": 70},
+    "sword": {"base": "swordstone", "r": 3},
+    "dish": {"base": "dish", "r": 6},
+    "wheelbarrow": {"base": "wheelbarrow", "r": 3.2},
+    "bathtub": {"base": "bathtub", "r": 3.2},
+    "fridge": {"base": "fridge", "r": 3.4},
+    "computer": {"base": "computer", "r": 3},
+    "phonebooth": {"base": "phonebooth", "r": 4.4},
+    "busstop": {"base": "busstop", "r": 5},
+    "balloons": {"base": "balloons", "r": 3},
+    "bone": {"base": "bone", "r": 2},
+    "shield": {"base": "shield", "r": 3},
+})
+
+PROP_WORDS.update(_words({
+    "ball": "ball football soccer basketball baseball volleyball beachball toy",
+    "kite": "kite",
+    "umbrella": "umbrella parasol sunshade towel",
+    "book": "book novel textbook diary journal notebook newspaper magazine scroll "
+            "manuscript encyclopedia homework",
+    "bed": "bed mattress crib cot bunk hammock bedroom",
+    "sofa": "sofa couch armchair loveseat",
+    "tv": "tv television telly",
+    "clock": "clock",
+    "door": "door doorway entrance exit",
+    "ladder": "ladder scaffold",
+    "mailbox": "mailbox postbox letterbox",
+    "trashcan": "trash garbage bin dumpster rubbish litter",
+    "trafficlight": "stoplight crosswalk",
+    "stopsign": "stopsign roadsign",
+    "hydrant": "hydrant",
+    "swing": "swings seesaw swingset",
+    "slide": "slide",
+    "sandcastle": "sandcastle",
+    "surfboard": "surfboard skateboard snowboard",
+    "cannon": "cannon catapult artillery",
+    "ferriswheel": "ferris rollercoaster",
+    "carousel": "carousel",
+    "telescope": "telescope binoculars microscope camera tripod",
+    "cake": "cake pie cupcake dessert pastry cookie donut doughnut pudding",
+    "gift": "gift parcel package",
+    "xmastree": "ornament tinsel",
+    "basket": "basket fruit apple banana pear grape vegetable groceries bread "
+              "food harvest berries cherry lemon peach",
+    "haystack": "haystack hay bale straw",
+    "beehive": "beehive hive honey honeycomb",
+    "piano": "piano organ keyboard",
+    "drums": "drum drums cymbal percussion band concert orchestra",
+    "guitar": "guitar violin cello banjo ukulele lute harp instrument amplifier",
+    "easel": "easel painting canvas portrait artwork masterpiece mural",
+    "globe": "globe atlas",
+    "trophy": "trophy medal prize award",
+    "rainbow": "rainbow",
+    "sword": "sword excalibur dagger blade spear axe",
+    "dish": "antenna radar satellite transmitter",
+    "wheelbarrow": "wheelbarrow shovel spade rake hoe",
+    "bathtub": "bathtub bath tub jacuzzi",
+    "fridge": "fridge refrigerator freezer kitchen oven stove",
+    "computer": "computer laptop monitor pc desktop tablet screen office",
+    "phonebooth": "payphone telephone",
+    "busstop": "busstop",
+    "balloons": "balloons confetti streamers decorations",
+    "bone": "bone bones fossil",
+    "shield": "shield armor armour armory armoury",
+    "table": "table desk feast banquet altar dinner supper lunch breakfast meal buffet",
+    "bench": "bench chair stool",
+    "lamp": "lamp lantern lamppost streetlight candle torch streetlamp lightbulb chandelier",
+    "tree": "tree oak pine willow birch maple cedar palm spruce elm redwood sapling stump",
+    "chest": "treasure chest gold box coffer loot coins riches suitcase luggage money cash",
+    "flag": "flag banner pennant bunting flagpole",
+    "barrel": "barrel crate keg cask cargo",
+}))
+
+PLACE_DRESSING.update({
+    "beach": ["umbrella", "sandcastle"], "seaside": ["umbrella"],
+    "playground": ["swing", "slide"], "park": ["bench", "fountain"],
+    "carnival": ["ferriswheel", "carousel"], "fair": ["ferriswheel", "stall"],
+    "funfair": ["ferriswheel", "carousel"], "fairground": ["ferriswheel", "carousel"],
+    "circus": ["tent", "flag", "balloons"], "festival": ["flag", "stall", "balloons"],
+    "birthday": ["cake", "balloons", "gift"], "party": ["balloons", "table", "flag"],
+    "wedding": ["flag", "table", "cake"], "christmas": ["xmastree", "gift", "snowman"],
+    "picnic": ["basket", "table"], "concert": ["drums", "guitar"], "band": ["drums", "guitar"],
+    "kitchen": ["fridge", "table"], "bedroom": ["bed", "clock"], "office": ["computer"],
+    "classroom": ["book", "globe"], "school": ["book"], "library": ["book"],
+    "museum": ["statue", "easel"], "gallery": ["easel"], "studio": ["easel"],
+    "farm": ["fence", "haystack", "windmill"], "barn": ["haystack"],
+    "street": ["trafficlight"], "road": ["stopsign"], "highway": ["stopsign"],
+    "station": ["busstop", "clock"], "observatory": ["telescope", "dish"],
+    "battlefield": ["cannon", "flag"], "fort": ["cannon", "flag"], "armory": ["shield"],
+    "livingroom": ["sofa", "tv"], "garage": ["ladder"],
+    "construction": ["ladder", "wheelbarrow"], "championship": ["trophy"],
+    "tournament": ["trophy", "flag"], "olympics": ["trophy", "flag"],
+})
+for _place, _extra in {
+    "ocean": ["umbrella", "sandcastle", "surfboard", "ball"],
+    "city": ["trafficlight", "mailbox", "hydrant", "trashcan", "busstop", "phonebooth"],
+    "village": ["haystack", "mailbox", "wheelbarrow", "basket"],
+    "meadow": ["kite", "haystack", "beehive", "swing", "basket"],
+    "lake": ["basket", "kite"], "forest": ["beehive", "ladder"],
+    "mountain": ["telescope"], "space": ["dish", "telescope"], "snow": ["xmastree"],
+    "desert": ["bone"],
+}.items():
+    AMBIENT_PROPS[_place] += _extra
+AMBIENT["city"] += [("bus", "walk", 1), ("taxi", "walk", 1), ("truck", "walk", 1),
+                    ("bicycle", "walk", 1), ("helicopter", "fly", 1)]
+AMBIENT["ocean"] += [("ship", "walk", 1), ("speedboat", "walk", 1)]
+AMBIENT["lake"] += [("rowboat", "walk", 1)]
+AMBIENT["village"] += [("tractor", "walk", 1), ("cart", "walk", 1), ("bicycle", "walk", 1)]
+AMBIENT["meadow"] += [("tractor", "walk", 1), ("bicycle", "walk", 1)]
+AMBIENT["snow"] += [("sled", "walk", 1)]
+AMBIENT["mountain"] += [("helicopter", "fly", 1)]

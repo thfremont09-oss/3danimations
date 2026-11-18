@@ -93,6 +93,15 @@ Relationships between things are read too:
   words ("POW!", "CLANG!") mark where blows land, and the camera keeps both
   sides in frame.
 
+- **Telling characters apart:** describing words make separate characters
+  and change how they look ("a brown dog and a white dog", "a big cat and a
+  little cat", "a baby dragon", "a robot dog"). Names take the kind they are
+  given ("Max the dog", "Max and Bella were dogs"). A later "the dog" means
+  the one already described, while "a dog" means a new one.
+- **Keeping everyone on stage:** "they", "everyone", "together", "each
+  other" and "him/her/them" bring back the characters already in the story,
+  and whatever is attacked joins the fight ("the shark attacked the boat").
+
 Killing verbs are tracked: "the pirate slew the dragon" ends with the dragon
 down, and it stays out of later scenes.
 

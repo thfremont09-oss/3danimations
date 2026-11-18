@@ -914,7 +914,7 @@ function makeActor(spec, n, stage) {
     x0: 0, z0: 0, y0: 0, facing: 0, duel: false, action: act,
     id: spec.id, riding: spec.riding, on: spec.on, mount: null, seat: null, perch: null, riders: 0,
     seats: ud.seats || SEATS[base] || [[0, ud.height * 0.6, 0, 'sit']], heading: 0, lift: 0,
-    side: spec.side || 0, fs: null, flash: 0, food: meal, n,
+    side: spec.side || 0, passive: !!spec.passive, fs: null, flash: 0, food: meal, n,
     front: Math.max(0.15, bounds.max.z), back: Math.max(0.15, -bounds.min.z),
     tall: Math.max(0.3, bounds.max.y), ud, weapon, weaponKind,
   };
@@ -1077,7 +1077,8 @@ function makeActor(spec, n, stage) {
 
     if (act === 'walk' || act === 'run') {
       const fast = act === 'run';
-      const v = (fast ? 4.2 : 1.5) * (o.speed || 1);
+      const v0 = (fast ? 4.2 : 1.5) * (o.speed || 1);
+      const v = actor.maxTravel ? Math.min(v0, actor.maxTravel / Math.max(dur, 1)) : v0;
       const f = fast ? 11 : 6.5;
       x += v * (t - dur / 2);
       heading = Math.PI / 2;
@@ -2966,6 +2967,8 @@ function stageFights(cast, R, dur) {
       const foe = b.foes[Math.floor(e / 2) % b.foes.length];
       let foeAttacks = (e % 2 === 0) === foeFirst;
       if (e > 1 && R() < 0.22) foeAttacks = !foeAttacks;
+      if (foe.passive) foeAttacks = false;              // a boat or a car only takes the blows
+      else if (b.target.passive) foeAttacks = true;
       const att = foeAttacks ? foe : b.target, def = foeAttacks ? b.target : foe;
       const len = (0.95 + R() * 0.3) * (1 + 0.1 * (Math.max(att.scale, def.scale) - 1));
       const seed = Math.floor(R() * 1000);
@@ -3578,6 +3581,7 @@ function buildWorldShot(sc, idx) {
       if (centreIsland) a.z0 -= 16;
     } else if (mixedPace && a.moving) {
       a.z0 += 1.9;                       // walkers pass in front of whoever stands still
+      a.maxTravel = 9;                   // ...and do not leave them behind, out of the shot
     }
     root.add(a.wrap);
   });
@@ -3612,7 +3616,8 @@ function buildWorldShot(sc, idx) {
   let leads = cast.filter((a) => !a.flying && !(a.aquatic && centreIsland));
   const allFlying = cast.length > 0 && !leads.length;
   if (!leads.length) leads = cast;
-  const dist = cast.length ? clamp(6.5 + total * 0.5 + (biggest - 1) * 2.5 + (allFlying ? 5 : 0), 7, 26)
+  const overhead = !allFlying && cast.some((a) => a.flying);       // something circling above the ones we follow
+  const dist = cast.length ? clamp(6.5 + total * 0.5 + (biggest - 1) * 2.5 + (allFlying ? 5 : 0) + (overhead ? 6 : 0), 7, 26)
     : FLAT ? 13 : sc.props.length ? 16 : extras.length ? 19 : 24;
   const quiet = cast.length > 0 && cast.length <= 4 && !fights
     && cast.every((a) => ['eat', 'drink', 'feed', 'talk'].includes(a.action) || a.seated);

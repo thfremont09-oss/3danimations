@@ -174,7 +174,7 @@ def test_death_by_pronoun_passive_and_plain_dying():
     assert cast(board["scenes"][1]) == {"knight": "slay", "dragon": "die"}
     assert cast(board["scenes"][2]) == {"knight": "walk", "dragon": "dead"}
     assert cast(scene("The king was killed by a wolf.")) == {"king": "die", "wolf": "slay"}
-    assert cast(scene("The old king died.")) == {"king": "die"}
+    assert cast(scene("The old king died.")) == {"king:old": "die"}
 
 
 def test_an_ordinary_fight_kills_nobody():
@@ -306,3 +306,108 @@ def test_every_food_and_weapon_can_be_drawn():
         assert set(table.values()) <= set(L.FOOD)
     weapons = {m.get("weapon") for m in L.MODELS.values()} - {None}
     assert weapons <= {"sword", "axe", "club", "staff", "blaster", "fist"}
+
+
+def test_describing_words_make_separate_characters_that_look_different():
+    story = ("once there was a brown dog ad a white dog. they lived together, but one day, "
+             "they found a bone. then the brown dog and white dog started fighting eachother. "
+             "but then they realized they could shar. now they celebrated")
+    scenes = build_storyboard(story)["scenes"]
+    for sc in scenes:
+        assert {a["id"] for a in sc["actors"]} == {"dog:brown", "dog:white"}, sc["text"]
+    fight = {a["id"]: a for a in scenes[2]["actors"]}
+    assert fight["dog:brown"]["action"] == fight["dog:white"]["action"] == "fight"
+    assert fight["dog:brown"]["side"] != fight["dog:white"]["side"]
+    assert fight["dog:brown"]["model"]["color"] != fight["dog:white"]["model"]["color"]
+    assert {a["action"] for a in scenes[-1]["actors"]} == {"jump"}
+
+
+def test_a_bare_mention_means_the_one_already_described():
+    board = build_storyboard("A red dragon flew above the castle. The knight fought the dragon.")
+    assert [a["id"] for a in board["scenes"][1]["actors"]] == ["knight", "dragon:red"]
+    sizes = {a["id"]: a["model"]["scale"] for a in scene("A big cat and a little cat played.")["actors"]}
+    assert sizes["cat:big"] > 1 > sizes["cat:little"]
+
+
+def test_the_other_one_is_a_second_character():
+    assert scene("The dog fought the other dog.")["actors"][0]["count"] == 2
+    assert scene("One dog bit the other.")["actors"][0]["count"] == 2
+
+
+def ids(text, index=-1):
+    return {a["id"]: (a["count"], a["action"]) for a in scene(text, index)["actors"]}
+
+
+def every_scene(text):
+    return [{a["id"]: (a["count"], a["action"]) for a in s["actors"]}
+            for s in build_storyboard(text)["scenes"]]
+
+
+def test_a_new_one_with_a_or_an_is_a_different_character():
+    assert list(ids("A brown dog ran. A dog barked.")) == ["dog"]
+    assert list(ids("A brown dog ran. The dog barked.")) == ["dog:brown"]
+
+
+def test_two_word_characters_are_one_character():
+    assert ids("A baby dragon and a giant spider fought.") == {
+        "dragon:baby": (1, "fight"), "crab:giant": (1, "fight")}
+    sc = scene("A robot dog played.")
+    assert [a["id"] for a in sc["actors"]] == ["dog:robot"]
+
+
+def test_names_take_the_kind_they_are_given():
+    assert every_scene("Max the dog and Bella the cat were friends. Max chased Bella.")[1] == {
+        "dog:Max": (1, "run"), "cat:Bella": (1, "run")}
+    assert every_scene("Max and Bella were dogs. They fought each other.")[1] == {
+        "dog:Max": (1, "fight"), "dog:Bella": (1, "fight")}
+    # said later in the story, still applies from the start
+    assert list(every_scene("Max played in the park. Max was a brown dog.")[0]) == ["dog:Max"]
+    assert ids("There was a dog named Max and a dog named Bella. The dogs fought.") == {
+        "dog:Max": (1, "fight"), "dog:Bella": (1, "fight")}
+
+
+def test_saying_what_someone_is_does_not_add_people():
+    assert every_scene("Max the dog and Bella the cat were friends.")[0] == {
+        "dog:Max": (1, "idle"), "cat:Bella": (1, "idle")}
+    assert every_scene("The man was a doctor. The doctor walked.") == [
+        {"person": (1, "idle")}, {"person": (1, "walk")}]
+    assert ids("They were dogs. They played.") == {"dog:narrator": (2, "dance")}
+
+
+def test_object_pronouns_bring_back_who_they_mean():
+    assert ids("A man walked. The dog bit him.") == {"dog": (1, "fight"), "person": (1, "fight")}
+
+
+def test_each_other_and_together_need_two():
+    story = "A cat met a dog. The cat slept. They played together."
+    assert ids(story) == {"cat": (1, "dance"), "dog": (1, "dance")}
+    story = "A dog and a cat lived together. The dog slept. The dog fought each other."
+    assert set(ids(story)) == {"dog", "cat"}
+
+
+def test_everyone_means_the_characters_we_know():
+    assert ids("Two dogs found a bone. Everyone celebrated.") == {"dog": (2, "look")}
+    got = ids("The pirate slayed the dragon and the townspeople celebrated with them.")
+    assert got == {"pirate": (1, "slay"), "dragon": (1, "die"), "person": (4, "jump")}
+
+
+def test_whatever_is_attacked_is_in_the_fight():
+    actors = {a["kind"]: a for a in scene("A shark attacked the boat.")["actors"]}
+    assert actors["shark"]["action"] == actors["boat"]["action"] == "fight"
+    assert actors["boat"]["passive"] and not actors["shark"]["passive"]
+    assert actors["shark"]["side"] != actors["boat"]["side"]
+
+
+def test_they_brings_back_a_whole_group():
+    assert ids("Three pigs built a house. A wolf came. They ran.") == {
+        "wolf": (1, "walk"), "pig": (3, "walk")}
+
+
+def test_typos_that_break_sentences():
+    assert set(ids("A brown dog ad a white dog fought.")) == {"dog:brown", "dog:white"}
+
+
+def test_what_a_verb_is_done_to_does_not_do_it():
+    assert ids("The bird flew over the dog.") == {"bird": (1, "fly"), "dog": (1, "idle")}
+    assert ids("The cat jumped over the dog.")["dog"] == (1, "idle")
+    assert ids("The cat chased the dog.") == {"cat": (1, "run"), "dog": (1, "run")}

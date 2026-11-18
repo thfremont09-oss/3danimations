@@ -128,6 +128,19 @@ def find_names(sentences: list[str]) -> set[str]:
             continue  # only ever "in Paris" / "to Rome": a place, not a person
         if mid[name] >= 1 or start[name] >= 2:
             names.add(name)
+    # A name seen once, at the start of a sentence, still counts when what follows
+    # says so: "Max and Bella ...", "Max the dog ...", "Max was a dog", "Max ran".
+    for sentence in sentences:
+        toks = [w.split("'")[0] for w, _ in _tokens(sentence)]
+        for i, word in enumerate(toks):
+            low = word.lower()
+            if word in names or i or word not in start or low in L.NOT_NAMES or low.endswith("ly"):
+                continue
+            nxt = [t.lower() for t in toks[i + 1: i + 4]]
+            if (nxt[:1] == ["and"] and len(toks) > i + 2 and toks[i + 2][:1].isupper()) \
+                    or (nxt[:1] and nxt[0] in L.APPOSITION and any(_find(t, L.ACTOR_WORDS) for t in nxt[1:])) \
+                    or (nxt[:1] and (_find(nxt[0], L.ACTION_WORDS) or _find(nxt[0], L.KILL_WORDS))):
+                names.add(word)
     return names
 
 
@@ -174,6 +187,7 @@ class _World:
         self.last_size = 0           # how many of them were in the latest scene
         self.dead: set[str] = set()  # ids of characters who have died
         self.name_kind: dict[str, str] = {}
+        self.name_desc: dict[str, tuple] = {}
         self.last_concrete = -99
         # creative liberty (0 = literal)
         self.liberty = 0
@@ -188,7 +202,7 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
     for w, _ in toks:
         parts = None if w.split("'")[0] in names else _split_compound(w.lower())
         words.extend(parts or [w])
-    lows = [w.lower() for w in words]
+    lows = [L.TYPOS.get(w.lower(), w.lower()) for w in words]
 
     actors: dict[str, dict] = {}
     props: list[str] = []
@@ -197,16 +211,32 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
     foods: list[dict] = []
     meal_food: str | None = None
     meal_pos: list[int] = []
+    said_to_be: str | None = None
     settings, hints, times, weathers, moods = [], [], [], [], Counter()
 
     def add_actor(kind: str, pos: int, count: int = 1, name: str | None = None,
-                  word: str | None = None) -> dict:
-        key = f"{kind}:{name}" if name else kind
+                  word: str | None = None, desc: tuple = (), plural: bool = False) -> dict:
+        fresh = bool(set(lows[max(0, pos - 2): pos]) & ({"a", "an", "one"} | L.OTHER_WORDS))
+        if not name and not desc and not fresh and kind not in {
+                a["kind"] for a in actors.values() if not a.get("desc") and not a["name"]}:
+            # A bare "the dog" after "a brown dog" (or "Max the dog") means that dog,
+            # not a new one.
+            same = [a for a in actors.values() if a["kind"] == kind and (a.get("desc") or a["name"])]
+            remembered = [a for a in world.cast if a["kind"] == kind and (a.get("desc") or a["name"])
+                          and a["id"] not in world.dead]
+            if same and not plural:
+                return same[-1]
+            if remembered:
+                picks = remembered if plural else remembered[:1]
+                for prev in picks:
+                    actors.setdefault(prev["id"], {**prev, "pos": pos, "words": {word}})
+                return actors[picks[0]["id"]]
+        key = f"{kind}:{name}" if name else f"{kind}:{'-'.join(desc)}" if desc else kind
         actor = actors.get(key)
         if actor is None:
-            actor = actors[key] = {"id": key, "kind": kind, "name": name,
+            actor = actors[key] = {"id": key, "kind": kind, "name": name, "desc": desc,
                                    "count": count, "pos": pos, "words": {word}}
-        elif set(lows[max(0, pos - 2): pos]) & {"a", "an", "another"} \
+        elif set(lows[max(0, pos - 2): pos]) & ({"a", "an"} | L.OTHER_WORDS) \
                 or (word and word not in actor["words"]):
             # "a boy and a girl", "the pirate and the ninja": two characters
             actor["count"] += count
@@ -234,7 +264,7 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
                 last_actor = (i, add_actor(prev["kind"], prev["pos"], 1, base))
             else:
                 kind = world.name_kind.setdefault(base, "person")
-                last_actor = (i, add_actor(kind, i, 1, base))
+                last_actor = (i, add_actor(kind, i, 1, base, desc=world.name_desc.get(base, ())))
             continue
         low = low.split("'")[0]
 
@@ -252,8 +282,37 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
             meal_food = meal_food or hit[0]
             meal_pos.append(i)
 
+        next_is_actor = i + 1 < len(lows) and bool(_find(lows[i + 1], L.ACTOR_WORDS))
+        if low in L.DESCRIBERS and next_is_actor and not food_kind:
+            continue                     # "baby dragon", "robot dog": it describes the dragon
+        appos = _apposition(words, lows, i, names)
+        if appos and (hit := _find(low, L.ACTOR_WORDS)):
+            # "Max the dog", "Max and Bella were dogs": the names are what they are called
+            for name in appos[0]:
+                world.name_kind[name] = hit[0]
+                if appos[1]:
+                    world.name_desc[name] = appos[1]
+                old = next((a for a in actors.values() if a["name"] == name), None)
+                if old and old["kind"] != hit[0]:
+                    del actors[old["id"]]
+                    add_actor(hit[0], old["pos"], 1, name, desc=appos[1])
+                elif old and appos[1]:
+                    old["desc"] = appos[1]
+            continue
+        k = i - 1
+        while k >= 0 and (lows[k] in L.PREDICATE_FILLER or lows[k] in L.DESCRIBERS):
+            k -= 1
+        predicate = k >= 1 and lows[k] in L.LINKING and lows[k - 1] != "there" and (
+            lows[k - 1] in L.PRONOUNS | L.FIRST_PERSON or bool(_find(lows[k - 1], L.ACTOR_WORDS))
+            or words[k - 1].split("'")[0] in names)
         if food_kind:
             foods.append({"kind": food_kind, "pos": i, "word": low, "used": False})
+        elif predicate and (low in L.COLLECTIVES or _find(low, L.ACTOR_WORDS)):
+            # "they were best friends": says what they are, not who
+            said_to_be = said_to_be or (L.COLLECTIVES[low][0] if low in L.COLLECTIVES
+                                        else _find(low, L.ACTOR_WORDS)[0])
+        elif low in L.GROUP_REFS and (actors or any(a["id"] not in world.dead for a in world.cast)):
+            pass                         # "everyone" = the characters we already know
         elif low in L.COLLECTIVES:
             kind, count = L.COLLECTIVES[low]
             last_actor = (i, add_actor(kind, i, count, word=low))
@@ -264,7 +323,16 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
             for back in lows[max(0, i - 2): i]:
                 count = L.NUMBERS.get(back, count)
             stem = next((s for s, _ in _candidates(low) if s in L.ACTOR_WORDS), low)
-            last_actor = (i, add_actor(kind, i, count, word=stem))
+            desc: list[str] = []
+            for back in reversed(lows[max(0, i - 3): i]):    # "the big brown dog"
+                if back not in L.DESCRIBERS:
+                    break
+                desc.insert(0, back)
+            last_actor = (i, add_actor(kind, i, count, word=stem, desc=tuple(desc), plural=plural))
+        elif low == "other" and last_actor and not last_actor[1]["name"] and lows[i - 1] != "each" and (
+                i + 1 >= len(lows) or _find(lows[i + 1], L.ACTION_WORDS)
+                or _find(lows[i + 1], L.KILL_WORDS) or lows[i + 1] in ("and", "but", "then", "back")):
+            last_actor[1]["count"] += 1                     # "one dog bit the other"
         elif hit := _find(low, L.PROP_WORDS):
             if hit[0] not in props:
                 props.append(hit[0])
@@ -291,6 +359,13 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
     def act_for(kind: str, pos: int) -> str:
         model = L.MODELS[kind]
         action = _pick_action(pos, actions, model.get("default", "idle"))
+        if pos >= 0 and not any(p > pos for p, _ in actions):
+            # Its verb comes before it, so it is what the verb was done to: "the bird
+            # flew over the dog" does not make the dog fly.
+            can_fly = model["base"] in L.FLYERS or model["base"] == "bird" or model.get("wings")
+            if (action == "fly" and not can_fly) or (action == "swim" and not model.get("water")) \
+                    or action in ("jump", "look"):
+                action = model.get("default", "idle") if model.get("default") != "fly" or can_fly else "idle"
         if model["base"] in L.VEHICLES:
             # Vehicles only drive, fly or stand still, whatever the nearby verb says.
             if action in ("walk", "run") or (action == "fly" and model["base"] in L.FLYERS):
@@ -309,7 +384,7 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
     # "it" only counts as a character when it does something ("it found", not "it was")
     subjects = [i for i, w in enumerate(lows)
                 if w in L.SUBJECT_PRONOUNS or (w == "it" and i + 1 in action_at)]
-    plural = bool(low_set & {"they", "them", "their", "theirs"})
+    plural = bool(low_set & ({"they", "them", "their", "theirs"} | L.GROUP_REFS))
     dead_before = set(world.dead)
     if low_set & L.REVIVE_WORDS:
         world.dead -= set(actors)
@@ -335,19 +410,36 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
                     actor["action"] = "ride"
                 else:
                     actor["riding"] = None
-        elif (low_set & L.FIRST_PERSON or low_set & L.SUBJECT_PRONOUNS) and physical:
-            # "I ran", "she danced", "they ate" with nobody introduced yet
+        elif (low_set & L.FIRST_PERSON or low_set & L.SUBJECT_PRONOUNS) and (physical or said_to_be):
+            # "I ran", "she danced", "they were dogs" with nobody introduced yet
             count = 2 if low_set & {"we", "us", "our", "they"} else 1
-            cast.append({"id": "person:narrator", "kind": "person", "name": None,
-                         "count": count, "action": physical[0]})
+            kind = said_to_be or "person"
+            cast.append({"id": f"{kind}:narrator", "kind": kind, "name": None,
+                         "count": count, "action": physical[0] if physical else act_for(kind, -1)})
     elif world.cast:
         first = min(a["pos"] for a in cast)
         lead = [i for i in subjects if i < first]
         if lead:
             present = {a["id"] for a in cast}
-            extra = [p for p in recalled if p["id"] not in present][:2]
+            extra = [p for p in recalled if p["id"] not in present][:4]
             for prev in extra:
                 cast.insert(0, {**prev, "action": act_for(prev["kind"], lead[0])})
+
+    # Some words need a second character: "each other", "together", "the dog bit
+    # him", "everyone". If only one is on stage, bring back whoever we already know.
+    present_n = sum(a["count"] for a in cast)
+    reciprocal = bool(low_set & L.RECIPROCAL) or _phrase(lows, "each", "other") \
+        or _phrase(lows, "one", "another")
+    object_refs = [i for i, w in enumerate(lows) if w in ("him", "her", "them")
+                   or (w == "it" and i and _find(lows[i - 1], L.ACTION_WORDS)
+                       and _find(lows[i - 1], L.ACTION_WORDS)[0] == "fight")]
+    if world.cast and cast and present_n < 2 and (reciprocal or plural or object_refs):
+        present = {a["id"] for a in cast}
+        pool = [p for p in living if p["id"] not in present
+                and L.MODELS[p["kind"]]["base"] not in L.VEHICLES]
+        many = reciprocal or plural or "them" in low_set
+        for prev in pool[:4] if many else pool[:1]:
+            cast.append({**prev, "action": act_for(prev["kind"], -1), "riding": None})
 
     # ---- life and death --------------------------------------------------
     placed = sorted((a for a in cast if a.get("pos", -1) >= 0), key=lambda a: a["pos"])
@@ -411,7 +503,7 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
             group = [a for a in cast if a.get("pos", -1) < 0] or (cast[:1] if len(cast) == 1 else [])
         return [a for a in group if base_of(a) not in L.VEHICLES]
 
-    def group_after(i: int, limit: int = 5) -> list[dict]:
+    def group_after(i: int, limit: int = 5, vehicles: bool = False) -> list[dict]:
         group: list[dict] = []
         edge = i
         for a in [a for a in placed if a["pos"] > i]:
@@ -421,7 +513,9 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
                 break
             group.append(a)
             edge = a["pos"]
-        return [a for a in group if base_of(a) not in L.VEHICLES]
+        while len(group) > 1 and group[-1]["pos"] + 1 < len(lows) and verbish(lows[group[-1]["pos"] + 1]):
+            group.pop()   # "slew the dragon and the villagers cheered": the villagers cheer
+        return [a for a in group if vehicles or base_of(a) not in L.VEHICLES]
 
     def default_food(actor: dict, drink: bool) -> str:
         if drink:
@@ -579,9 +673,32 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
     verbs = [i for i, w in enumerate(lows)
              if ((h := _find(w, L.ACTION_WORDS)) and h[0] == "fight") or _find(w, L.KILL_WORDS)
              or (eating_word(w) and any(a["action"] == "slay" for a in fighters))]
+    sided: set[str] = set()
+    for i in verbs:
+        if not ((h := _find(lows[i], L.ACTION_WORDS)) and h[0] == "fight"):
+            continue
+        attackers = [a for a in group_before(i) if a["action"] not in ("die", "dead")]
+        targets = [a for a in group_after(i, vehicles=True)
+                   if a not in attackers and a["action"] not in ("die", "dead")]
+        if not attackers or not targets:
+            continue
+        for a in attackers:              # "the shark attacked the boat": the boat is in it too
+            if a["action"] not in ("slay", "ride"):
+                a["action"] = "fight"
+            a["side"] = 0
+            sided.add(a["id"])
+        for a in targets:
+            if a["action"] not in ("slay", "ride"):
+                a["action"] = "fight"
+            a["passive"] = base_of(a) in L.VEHICLES and base_of(a) not in L.FLYERS \
+                and base_of(a) != "tank"
+            a["side"] = 1
+            sided.add(a["id"])
+    fighters = [a for a in cast if a["action"] in ("fight", "slay", "die")]
     if fighters and verbs:
         for a in fighters:
-            a["side"] = 0 if a.get("pos", -1) < verbs[0] else 1
+            if a["id"] not in sided:
+                a["side"] = 0 if a.get("pos", -1) < verbs[0] else 1
         if len({a["side"] for a in fighters}) == 1 and len(fighters) > 1:
             for a in fighters[1:]:      # "the cat and the dog fought": one against the other
                 a["side"] = 1
@@ -646,7 +763,7 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
     if cast:
         # Most recent first, so "they" can reach back past the last scene.
         seen = [{"id": a["id"], "kind": a["kind"], "name": a["name"], "count": a["count"],
-                 "riding": a.get("riding")} for a in cast]
+                 "riding": a.get("riding"), "desc": a.get("desc", ())} for a in cast]
         ids = {a["id"] for a in seen}
         world.cast = (seen + [a for a in world.cast if a["id"] not in ids])[:5]
         world.last_size = len(seen)
@@ -711,10 +828,8 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
              "holding": _held(holding.get(a["id"])),
              "food": ({"kind": food_of[a["id"]], "drink": L.FOOD[food_of[a["id"]]]["drink"]}
                       if a["id"] in food_of else None),
-             "side": a.get("side", 0),
-             "model": {**{k: v for k, v in L.MODELS[a["kind"]].items()
-                          if k not in ("default", "implies", "water")},
-                       **({"open": True} if a.get("carrying") else {})}}
+             "side": a.get("side", 0), "passive": bool(a.get("passive")),
+             "model": _look(a)}
             for a in cast[:6] + extras
         ],
         "props": [{"kind": p, **L.PROPS[p],
@@ -722,6 +837,50 @@ def _parse_scene(idx: int, captions: list[str], names: set[str], world: _World) 
                   for p in props[:5]],
         "keywords": _keywords(words),
     }
+
+
+def _phrase(lows: list[str], first: str, second: str) -> bool:
+    return any(a == first and b == second for a, b in zip(lows, lows[1:]))
+
+
+def _apposition(words: list[str], lows: list[str], i: int, names: set[str]):
+    """'Max the dog', 'Max and Bella were dogs', 'Max, a brown dog' -> (names, describing words)."""
+    j, between = i - 1, []
+    while j >= 0 and words[j].split("'")[0] not in names and (
+            lows[j] in L.APPOSITION or lows[j] in L.DESCRIBERS):
+        between.append(lows[j])
+        j -= 1
+    if j < 0 or words[j].split("'")[0] not in names or not set(between) & L.APPOSITION:
+        return None
+    group, k = [], j
+    while k >= 0:
+        name = words[k].split("'")[0]
+        if name in names:
+            group.append(name)
+        elif lows[k] != "and":
+            break
+        k -= 1
+    return group, tuple(w for w in reversed(between) if w in L.DESCRIBERS)
+
+
+def _look(actor: dict) -> dict:
+    """The actor's model, coloured and sized by its describing words."""
+    model = {k: v for k, v in L.MODELS[actor["kind"]].items()
+             if k not in ("default", "implies", "water")}
+    if actor.get("carrying"):
+        model["open"] = True
+    for word in actor.get("desc") or ():
+        if L.COLOR_WORDS.get(word):
+            model["color"] = L.COLOR_WORDS[word]
+            model.pop("pattern", None)
+            if model.get("skin") and model["base"] == "person" and model.get("ghost"):
+                model["skin"] = model["color"]
+        if word in L.PATTERN_WORDS and model["base"] == "quad":
+            model["pattern"] = L.PATTERN_WORDS[word]
+            model["ink"] = "#1d1a17"
+        if word in L.SIZE_WORDS:
+            model["scale"] = round(model.get("scale", 1) * L.SIZE_WORDS[word], 3)
+    return model
 
 
 def _held(kind: str | None) -> dict | None:
@@ -747,6 +906,15 @@ def build_storyboard(text: str, max_scenes: int = 12, pace: float = 1.0,
     sentences = split_sentences(text) if text else []
     names = find_names(sentences)
     world = _World()
+    for sentence in sentences:                     # learn "Max was a dog" before staging anything
+        toks = [w for w, _ in _tokens(sentence)]
+        lows = [L.TYPOS.get(w.lower(), w.lower()) for w in toks]
+        for i, low in enumerate(lows):
+            if (hit := _find(low, L.ACTOR_WORDS)) and (found := _apposition(toks, lows, i, names)):
+                for name in found[0]:
+                    world.name_kind.setdefault(name, hit[0])
+                    if found[1]:
+                        world.name_desc.setdefault(name, found[1])
     seed = (zlib.crc32(text.encode("utf-8")) + variation * 9973) & 0xFFFFFF
     if liberty:
         every = [w.lower() for s in sentences for w, _ in _tokens(s)]

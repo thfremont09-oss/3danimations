@@ -1210,3 +1210,57 @@ for _kind, _weapon in {
     "police": "fist", "superhero": "fist", "robot": "fist",
 }.items():
     MODELS[_kind]["weapon"] = _weapon
+
+
+# --------------------------------------------------------------------------
+# Describing words: "the brown dog and the white dog" are two different dogs,
+# and they look brown and white.
+# --------------------------------------------------------------------------
+COLOR_WORDS = {
+    "brown": "#8b5a2b", "white": "#f2f0ea", "black": "#2a2a2e", "grey": "#8d9096",
+    "gray": "#8d9096", "red": "#c62828", "blue": "#2e6fd1", "green": "#3f9b4a",
+    "yellow": "#f2c230", "orange": "#f28c1a", "pink": "#f48fb1", "purple": "#7e57c2",
+    "golden": "#e0b030", "silver": "#c0c6cc", "tan": "#d2a56c", "ginger": "#d9662b",
+    "spotted": None, "striped": None, "spotty": None, "stripy": None,
+}
+PATTERN_WORDS = {"spotted": "spots", "spotty": "spots", "striped": "stripes", "stripy": "stripes"}
+SIZE_WORDS = {"big": 1.35, "large": 1.35, "huge": 1.75, "enormous": 1.9, "little": 0.68,
+              "small": 0.68, "tiny": 0.45, "tall": 1.2, "short": 0.85, "fat": 1.15,
+              "skinny": 0.95, "chubby": 1.1, "young": 0.85, "old": 1.0, "older": 1.0,
+              "younger": 0.85, "baby": 0.55}
+# Words that make a second character without changing how it looks.
+OTHER_WORDS = {"other", "another", "second", "third", "fourth", "next"}
+DESCRIBERS = set(COLOR_WORDS) | set(SIZE_WORDS)
+
+# Character words that describe the next character instead ("a baby dragon",
+# "a robot dog", "an ice dragon") when another character word follows.
+SIZE_WORDS.update({"giant": 2.2, "monster": 1.6, "mini": 0.5})
+COLOR_WORDS.update({"robot": "#9aa7b5", "ghost": "#e9edff", "zombie": "#7fae6a", "ice": "#bfe6fb",
+                    "fire": "#e2412f", "snow": "#f4f7fa", "shadow": "#2a2a2e", "metal": "#9aa7b5"})
+DESCRIBERS = set(COLOR_WORDS) | set(SIZE_WORDS)
+
+# "Max the dog", "Max and Bella were dogs": words that join a name to what it is.
+APPOSITION = {"the", "a", "an", "was", "were", "is", "are"}
+# Words that need two or more characters on stage.
+RECIPROCAL = {"eachother", "together", "both", "against"}
+# Words for "the whole cast", which mean whoever we already know when we know anyone.
+GROUP_REFS = {"everyone", "everybody", "all", "both"}
+# Slips that break the sentence structure the parser relies on.
+TYPOS = {"ad": "and", "adn": "and", "nad": "and", "teh": "the", "hte": "the", "thier": "their",
+         "theyre": "they", "fougth": "fought", "figth": "fight", "fighted": "fought"}
+
+ACTOR_WORDS.update(_words({
+    "dog": "doggy doggo pooch pet",
+    "person": "owner buddy pal",
+}))
+COLLECTIVES.update({"animals": ("dog", 3), "pets": ("dog", 2), "friends": ("person", 3)})
+
+LINKING = {"was", "were", "is", "are", "became", "become", "remained", "stayed", "be", "being"}
+# "they were best friends": words that can sit between a linking verb and what follows it
+PREDICATE_FILLER = {"a", "an", "the", "best", "good", "great", "close", "true", "new", "such",
+                    "very", "really", "still", "also", "just", "both", "all"}
+# Capitalised words that start sentences but are never names.
+NOT_NAMES = {"meanwhile", "afterwards", "eventually", "finally", "later", "soon", "yesterday",
+             "today", "tonight", "sometimes", "everyone", "everybody", "nobody", "somebody",
+             "someone", "anyone", "maybe", "perhaps", "however", "suddenly", "luckily",
+             "unfortunately", "fortunately", "instead", "together", "first", "next", "last"}

@@ -39,14 +39,26 @@ const glow = (color, k = 1.5) => mat(color, { emissive: color, emissiveIntensity
 function mesh(geo, material, x = 0, y = 0, z = 0) {
   const m = new THREE.Mesh(geo, material);
   m.position.set(x, y, z);
-  m.castShadow = true;
+  if (!geo.boundingSphere) geo.computeBoundingSphere();
+  m.castShadow = geo.boundingSphere.radius > 0.05;     // a button or a seed casts no shadow worth drawing
   m.receiveShadow = true;
   return m;
 }
 const box = (w, h, d) => new THREE.BoxGeometry(w, h, d);
 const ico = (r, detail = 0) => new THREE.IcosahedronGeometry(r, detail);
-const ball = (r, detail = 1) => (detail ? new THREE.SphereGeometry(r, 20, 14) : ico(r, 0));
-const capsule = (r, len) => new THREE.CapsuleGeometry(r, len, 6, 14);
+// Spheres get as many segments as their size can show, and identical ones share geometry.
+const shapeCache = new Map();
+const cached = (key, make) => shapeCache.get(key) || shapeCache.set(key, make()).get(key);
+const ball = (r, detail = 1) => {
+  if (!detail) return ico(r, 0);
+  const [w, h] = detail >= 2 || r >= 0.25 ? [24, 16] : r >= 0.08 ? [16, 11] : r >= 0.03 ? [11, 8] : [8, 6];
+  return cached(`b${r.toFixed(4)}:${w}`, () => new THREE.SphereGeometry(r, w, h));
+};
+// A lighter sphere for foliage and other background clumps.
+const blob = (r) => cached(`l${r.toFixed(3)}`, () => new THREE.SphereGeometry(r, 10, 7));
+const soft = (r) => cached(`s${r.toFixed(2)}`, () => new THREE.SphereGeometry(r, 16, 10));   // hills and dunes
+const capsule = (r, len) => cached(`c${r.toFixed(4)}:${len.toFixed(4)}`,
+  () => (r < 0.04 ? new THREE.CapsuleGeometry(r, len, 3, 8) : new THREE.CapsuleGeometry(r, len, 6, 14)));
 function facet(geo) {             // hard edges: roofs, pyramids, trunks
   const g = geo.toNonIndexed();
   g.computeVertexNormals();
@@ -112,6 +124,139 @@ function patternTexture(kind, base, ink) {   // stripes and spots for animal coa
 }
 
 const put = (parent, child) => { parent.add(child); return child; };
+
+// ---- richer shapes -----------------------------------------------------------
+// A box with softened edges and corners.
+const rboxCache = new Map();
+function rbox(w, h, d, r = Math.min(w, h, d) * 0.2) {
+  const key = [w, h, d, r].map((v) => v.toFixed(3)).join();
+  if (rboxCache.has(key)) return rboxCache.get(key);
+  r = Math.max(0.002, Math.min(r, w / 2.2, h / 2.2, d / 2.2));
+  const b = r * 0.45, c = r - b, iw = w - 2 * b, ih = h - 2 * b;
+  const s = new THREE.Shape();
+  s.moveTo(-iw / 2 + c, -ih / 2);
+  s.lineTo(iw / 2 - c, -ih / 2); s.quadraticCurveTo(iw / 2, -ih / 2, iw / 2, -ih / 2 + c);
+  s.lineTo(iw / 2, ih / 2 - c); s.quadraticCurveTo(iw / 2, ih / 2, iw / 2 - c, ih / 2);
+  s.lineTo(-iw / 2 + c, ih / 2); s.quadraticCurveTo(-iw / 2, ih / 2, -iw / 2, ih / 2 - c);
+  s.lineTo(-iw / 2, -ih / 2 + c); s.quadraticCurveTo(-iw / 2, -ih / 2, -iw / 2 + c, -ih / 2);
+  const geo = new THREE.ExtrudeGeometry(s, { depth: Math.max(0.001, d - 2 * b), bevelEnabled: true,
+    bevelThickness: b, bevelSize: b, bevelSegments: 2, curveSegments: 3 });
+  geo.translate(0, 0, -Math.max(0.001, d - 2 * b) / 2);
+  geo.computeVertexNormals();
+  rboxCache.set(key, geo);
+  return geo;
+}
+// A shape turned on a lathe from [radius, height] pairs: vases, trunks, bottles, towers.
+const lathe = (pts, segs = 18) => new THREE.LatheGeometry(pts.map(([r, y]) => new THREE.Vector2(Math.max(0.0001, r), y)), segs);
+// A smooth tube through points: tails, branches, handles, horns.
+const tube = (pts, r, segs = 20, sides = 8) =>
+  new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts.map((p) => new THREE.Vector3(...p))), segs, r, sides, false);
+// A flat outline given thickness: leaves, flags, fins, panels.
+function slab(points, depth, bevel = 0) {
+  const s = new THREE.Shape();
+  points.forEach(([x, y], i) => (i ? s.lineTo(x, y) : s.moveTo(x, y)));
+  const geo = new THREE.ExtrudeGeometry(s, { depth, bevelEnabled: bevel > 0, bevelThickness: bevel, bevelSize: bevel, bevelSegments: 1 });
+  geo.translate(0, 0, -depth / 2);
+  return geo;
+}
+const dome = (r, part = 0.5) => new THREE.SphereGeometry(r, 18, 10, 0, Math.PI * 2, 0, Math.PI * part);
+const gem = (r) => new THREE.OctahedronGeometry(r);
+const dodeca = (r) => new THREE.DodecahedronGeometry(r);
+const tetra = (r) => new THREE.TetrahedronGeometry(r);
+
+// Fuse a still piece of scenery into one mesh per material: same look, far fewer draw calls.
+const bakeKey = (m) => [m.type, m.color.getHexString(), m.emissive ? m.emissive.getHexString() + m.emissiveIntensity : '',
+  m.flatShading, m.roughness, m.metalness, m.side, m.transparent, m.opacity, m.map ? m.map.uuid : ''].join('|');
+// Fuse the rigid parts of a model: meshes that never move on their own relative to
+// their parent. Pivots (wheels, limbs, heads) keep moving; anything listed in keep
+// (a mouth, fire, a rotor) stays a separate mesh.
+// A mirrored part (scale -1) turns inside out once its matrix is baked in: swap each
+// triangle's winding back.
+function unmirror(geo, matrix) {
+  if (matrix.determinant() >= 0) return geo;
+  for (const name of Object.keys(geo.attributes)) {
+    const a = geo.attributes[name], n = a.itemSize, arr = a.array;
+    for (let t = 0; t < a.count; t += 3) for (let k = 0; k < n; k++) {
+      const i1 = (t + 1) * n + k, i2 = (t + 2) * n + k, v = arr[i1];
+      arr[i1] = arr[i2];
+      arr[i2] = v;
+    }
+  }
+  return geo;
+}
+function bakeStatic(node, keep) {
+  const loose = node.children.filter((c) => c.isMesh && !keep.has(c) && !c.children.length
+    && c.material && !Array.isArray(c.material));
+  if (loose.length > 1) {
+    const buckets = new Map();
+    loose.forEach((m) => {
+      m.updateMatrix();
+      const geo = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone();
+      geo.applyMatrix4(m.matrix);
+      unmirror(geo, m.matrix);
+      const key = bakeKey(m.material);
+      if (!buckets.has(key)) buckets.set(key, { material: m.material, geos: [], shadow: false });
+      const b = buckets.get(key);
+      b.geos.push(geo);
+      b.shadow = b.shadow || m.castShadow;
+      node.remove(m);
+    });
+    buckets.forEach(({ material, geos, shadow }) => {
+      const merged = mergeGeos(geos);
+      if (!merged) return;
+      const m = new THREE.Mesh(merged, material);
+      m.castShadow = shadow;
+      m.receiveShadow = true;
+      node.add(m);
+    });
+  }
+  node.children.forEach((c) => { if (c.children.length || c.isGroup) bakeStatic(c, keep); });   // into heads too; the mouth stays its own
+}
+function mergeGeos(geos) {
+  const merged = new THREE.BufferGeometry();
+  for (const name of ['position', 'normal', 'uv']) {
+    if (!geos.every((g) => g.attributes[name])) { if (name === 'position') return null; continue; }
+    const size = geos[0].attributes[name].itemSize;
+    const arr = new Float32Array(geos.reduce((n, g) => n + g.attributes[name].count, 0) * size);
+    let off = 0;
+    geos.forEach((g) => { arr.set(g.attributes[name].array, off); off += g.attributes[name].count * size; });
+    merged.setAttribute(name, new THREE.BufferAttribute(arr, size));
+  }
+  merged.computeBoundingSphere();
+  return merged;
+}
+function bakeInPlace(group) {
+  if (!group || !group.isGroup) return group;
+  group.updateMatrixWorld(true);
+  const inv = new THREE.Matrix4().copy(group.matrixWorld).invert(), rel = new THREE.Matrix4();
+  const buckets = new Map();
+  group.traverse((m) => {
+    if (!m.isMesh) return;
+    rel.multiplyMatrices(inv, m.matrixWorld);
+    const geo = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone();
+    geo.applyMatrix4(rel);
+    unmirror(geo, rel);
+    const key = bakeKey(m.material);
+    if (!buckets.has(key)) buckets.set(key, { material: m.material, geos: [] });
+    buckets.get(key).geos.push(geo);
+  });
+  group.clear();
+  buckets.forEach(({ material, geos }) => {
+    const merged = new THREE.BufferGeometry();
+    for (const name of ['position', 'normal', 'uv']) {
+      if (!geos.every((g) => g.attributes[name])) continue;
+      const size = geos[0].attributes[name].itemSize;
+      const arr = new Float32Array(geos.reduce((n, g) => n + g.attributes[name].count, 0) * size);
+      let off = 0;
+      geos.forEach((g) => { arr.set(g.attributes[name].array, off); off += g.attributes[name].count * size; });
+      merged.setAttribute(name, new THREE.BufferAttribute(arr, size));
+    }
+    const m = new THREE.Mesh(merged, material);
+    m.castShadow = m.receiveShadow = true;
+    group.add(m);
+  });
+  return group;
+}
 function pivot(parent, x, y, z) {
   const p = new THREE.Group();
   p.position.set(x, y, z);
@@ -162,8 +307,11 @@ function buildPerson(o, id) {
   const skin = mat(o.skin || any(SKIN), ghost);
   const pants = mat(o.armor ? '#8892a0' : any(TROUSERS), o.armor ? steel : {});
   const legs = [], arms = [];
+  const trim = mat(mix(color, '#000000', 0.35), o.armor ? steel : ghost);
   if (o.robe) {
-    g.add(mesh(cyl(0.2, 0.5, 1.25, 20), cloth, 0, 0.66, 0));
+    g.add(mesh(lathe([[0.5, 0.04], [0.47, 0.3], [0.32, 0.9], [0.2, 1.3]], 22), cloth, 0, 0, 0));
+    put(g, mesh(new THREE.TorusGeometry(0.49, 0.025, 6, 24), trim, 0, 0.06, 0)).rotation.x = Math.PI / 2;   // hem
+    put(g, mesh(new THREE.TorusGeometry(0.29, 0.03, 6, 20), trim, 0, 0.95, 0)).rotation.x = Math.PI / 2;    // sash
   } else {
     const torso = mesh(capsule(0.19, 0.34), cloth, 0, 1.08, 0);
     torso.scale.set(1.15, 1, 0.8);
@@ -171,12 +319,17 @@ function buildPerson(o, id) {
     const hips = mesh(ball(0.2), pants, 0, 0.82, 0);
     hips.scale.set(1.1, 0.7, 0.85);
     g.add(hips);
+    const belt = mesh(cyl(0.215, 0.215, 0.06, 20), mat(o.armor ? '#6b4a2b' : '#3a2a22'), 0, 0.9, 0);
+    belt.scale.z = 0.8;
+    g.add(belt, mesh(rbox(0.07, 0.055, 0.02, 0.01), mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), 0, 0.9, 0.17));
+    for (let i = 0; i < 3; i++) g.add(mesh(ball(0.016), trim, 0, 1.0 + i * 0.1, 0.155 - i * 0.004));   // buttons
     for (const s of [-1, 1]) {
       const p = pivot(g, s * 0.11, 0.8, 0);
       p.add(mesh(capsule(0.075, 0.56), pants, 0, -0.37, 0));
+      p.add(mesh(cyl(0.082, 0.082, 0.05, 14), mat(mix(o.armor ? '#8892a0' : '#2f3542', '#000000', 0.2)), 0, -0.66, 0));  // hem
       const shoe = mesh(ball(0.09), mat('#2a2522'), 0, -0.75, 0.05);
       shoe.scale.set(0.9, 0.6, 1.5);
-      p.add(shoe);
+      p.add(shoe, mesh(rbox(0.15, 0.025, 0.26, 0.01), mat('#151312'), 0, -0.79, 0.05));                          // sole
       legs.push(p);
     }
   }
@@ -187,16 +340,30 @@ function buildPerson(o, id) {
     const elbow = pivot(p, 0, -0.31, 0);
     elbow.add(mesh(ball(0.054), cloth));
     elbow.add(mesh(capsule(0.05, 0.19), cloth, 0, -0.145, 0));
+    elbow.add(mesh(cyl(0.057, 0.057, 0.04, 12), trim, 0, -0.25, 0));                 // cuff
     const hand = pivot(elbow, 0, -0.3, 0);
     hand.add(mesh(ball(0.06), skin));
+    put(hand, mesh(capsule(0.018, 0.04), skin, -s * 0.045, 0.0, 0.035)).rotation.z = -s * 0.6;   // thumb
     p.userData = { side: s, elbow, hand, L1: 0.31, L2: 0.3 };
     arms.push(p);
   }
   g.add(mesh(cyl(0.07, 0.08, 0.12, 10), skin, 0, 1.38, 0));
+  put(g, mesh(new THREE.TorusGeometry(0.09, 0.025, 6, 16), trim, 0, 1.34, 0)).rotation.x = Math.PI / 2;   // collar
   const hr = o.bigHead ? 0.34 : 0.2;
   const head = mesh(ball(hr), skin, 0, 1.42 + hr, 0);
   if (!o.bigHead) head.scale.y = 1.08;
-  for (const s of [-1, 1]) head.add(mesh(ball(hr * 0.14), mat('#1b1b1f'), s * hr * 0.36, hr * 0.12, hr * 0.9));
+  for (const s of [-1, 1]) {
+    const white = mesh(ball(hr * 0.17), mat('#fbfbf7', ghost), s * hr * 0.36, hr * 0.12, hr * 0.84);
+    white.scale.z = 0.6;
+    head.add(white, mesh(ball(hr * 0.11), mat('#1b1b1f'), s * hr * 0.36, hr * 0.11, hr * 0.94));
+    put(head, mesh(rbox(hr * 0.32, hr * 0.06, hr * 0.06, hr * 0.02), mat(o.bigHead ? '#1b1b1f' : '#3b2a1a'), s * hr * 0.36, hr * 0.38, hr * 0.86)).rotation.z = -s * 0.15;  // brow
+    const ear = mesh(ball(hr * 0.2), skin, s * hr * 0.98, 0, 0);
+    ear.scale.set(0.45, 1, 0.7);
+    if (!o.bigHead) head.add(ear);
+  }
+  const nose = mesh(ball(hr * 0.13), skin, 0, -hr * 0.1, hr * 0.98);
+  nose.scale.set(0.9, 1, 1.1);
+  head.add(nose);
   const lips = mesh(ball(hr * 0.2), mat('#7a2e2e'), 0, -hr * 0.4, hr * 0.88);
   lips.scale.set(1.3, 0.25, 0.5);
   head.add(lips);
@@ -228,8 +395,12 @@ function buildRobot() {
   const metal = mat('#9aa7b5', { metalness: 0.7, roughness: 0.4 });
   const dark = mat('#4a5562', { metalness: 0.6, roughness: 0.5 });
   const legs = [], arms = [];
-  g.add(mesh(box(0.6, 0.7, 0.4), metal, 0, 1.05, 0));
-  g.add(mesh(box(0.22, 0.12, 0.05), glow('#5eead4'), 0, 1.12, 0.21));
+  g.add(mesh(rbox(0.6, 0.7, 0.4, 0.06), metal, 0, 1.05, 0));
+  g.add(mesh(rbox(0.34, 0.26, 0.04, 0.03), dark, 0, 1.12, 0.2));                     // chest panel
+  g.add(mesh(box(0.22, 0.06, 0.05), glow('#5eead4'), 0, 1.16, 0.22));
+  ['#ff5d5d', '#ffd166', '#5eead4'].forEach((c, i) => g.add(mesh(ball(0.022), glow(c, 2), (i - 1) * 0.07, 1.06, 0.225)));
+  g.add(mesh(rbox(0.62, 0.08, 0.42, 0.03), dark, 0, 0.74, 0), mesh(rbox(0.36, 0.42, 0.14, 0.04), dark, 0, 1.08, -0.26));   // belt, power pack
+  g.add(mesh(cyl(0.08, 0.1, 0.12, 10), dark, 0, 1.44, 0));                          // neck
   for (const s of [-1, 1]) {
     const leg = pivot(g, s * 0.16, 0.7, 0);
     leg.add(mesh(box(0.16, 0.7, 0.18), dark, 0, -0.35, 0));
@@ -240,13 +411,17 @@ function buildRobot() {
     const elbow = pivot(arm, 0, -0.31, 0);
     elbow.add(mesh(ball(0.075), metal), mesh(box(0.12, 0.28, 0.13), dark, 0, -0.15, 0));
     const hand = pivot(elbow, 0, -0.31, 0);
-    hand.add(mesh(box(0.14, 0.1, 0.14), metal));
+    hand.add(mesh(rbox(0.14, 0.1, 0.14, 0.03), metal));
+    for (const k of [-1, 1]) hand.add(mesh(box(0.03, 0.08, 0.03), dark, k * 0.04, -0.08, 0.03));   // claw fingers
+    arm.add(mesh(ball(0.1), metal));                                                                  // shoulder joint
+    leg.add(mesh(ball(0.09), metal, 0, -0.35, 0), mesh(rbox(0.2, 0.08, 0.3, 0.03), metal, 0, -0.68, 0.05));   // knee, foot
     arm.userData = { side: s, elbow, hand, L1: 0.31, L2: 0.31 };
     arms.push(arm);
   }
   const head = mesh(box(0.46, 0.38, 0.4), metal, 0, 1.63, 0);
   for (const s of [-1, 1]) head.add(mesh(ball(0.06, 1), glow('#ffd166'), s * 0.11, 0.02, 0.2));
-  head.add(mesh(cyl(0.015, 0.015, 0.25, 5), dark, 0, 0.3, 0));
+  head.add(mesh(cyl(0.015, 0.015, 0.25, 5), dark, 0, 0.3, 0), mesh(cyl(0.04, 0.05, 0.04, 10), metal, 0, 0.2, 0));
+  for (const k of [-1, 1]) put(head, mesh(cyl(0.05, 0.05, 0.06, 10), dark, k * 0.25, 0, 0)).rotation.z = Math.PI / 2;   // ear bolts
   head.add(mesh(ball(0.05, 1), glow('#ff5d5d'), 0, 0.44, 0));
   const lips = mesh(box(0.2, 0.05, 0.03), mat('#1d232b'), 0, -0.1, 0.205);
   head.add(lips);
@@ -280,8 +455,16 @@ function buildQuad(o) {
   snout.scale.z = 1.3;
   head.add(snout);
   head.add(mesh(ball(W * 0.07), mat('#15151a'), 0, -W * 0.04, W * 0.66));
+  const light = mat(o.breath ? '#e0a83e' : mix(o.color, '#ffffff', 0.28));   // dragons have a golden scaled belly
+  head.add(mesh(rbox(W * 0.22, W * 0.02, W * 0.02, W * 0.008), mat('#2a1a14'), 0, -W * 0.2, W * 0.52));   // mouth line
   for (const s of [-1, 1]) {
-    head.add(mesh(ball(W * 0.055), mat('#15151a'), s * W * 0.24, W * 0.12, W * 0.28));
+    const white = mesh(ball(W * 0.075), mat('#fbfbf7'), s * W * 0.24, W * 0.12, W * 0.25);
+    white.scale.z = 0.7;
+    head.add(white, mesh(ball(W * 0.055), mat('#15151a'), s * W * 0.25, W * 0.12, W * 0.29));
+    head.add(mesh(ball(W * 0.018), mat('#ffffff'), s * W * 0.23, W * 0.15, W * 0.33));                     // glint
+    head.add(mesh(ball(W * 0.025), mat('#2a1a14'), s * W * 0.05, -W * 0.02, W * 0.68));                  // nostril
+    if (o.ears === 'up') head.add(mesh(cone(W * 0.07, W * 0.24, 8), mat('#e8a3a3'), s * W * 0.22, W * 0.38, -W * 0.04));
+    if (o.ears === 'round') head.add(mesh(ball(W * 0.09), mat('#e8a3a3'), s * W * 0.3, W * 0.3, -W * 0.0));
     if (o.ears === 'up') head.add(mesh(cone(W * 0.13, W * 0.36, 10), dark, s * W * 0.22, W * 0.42, -W * 0.08));
     if (o.ears === 'round') head.add(mesh(ball(W * 0.14), dark, s * W * 0.3, W * 0.3, -W * 0.05));
     if (o.ears === 'long') head.add(mesh(capsule(W * 0.07, W * 0.7), plain, s * W * 0.16, W * 0.8, -W * 0.1));
@@ -298,21 +481,31 @@ function buildQuad(o) {
     if (low <= W * 0.15 + 0.03) break;
   }
   const grazeZ = np.z + sy * Math.sin(graze) + sz * Math.cos(graze);
+  const belly = mesh(capsule(br * 0.8, Math.max(0.02, L - W) * 0.8), light, 0, by - br * 0.35, 0);
+  belly.rotation.x = Math.PI / 2;
+  belly.scale.set(1, 1, 0.7);
+  g.add(belly, mesh(ball(br * 0.75), light, 0, by + br * 0.05, L / 2 - W * 0.05));   // pale belly and chest
   const lw = Math.max(0.035, W * 0.14);
   for (const [sx, sz] of [[-1, 1], [1, 1], [-1, -1], [1, -1]]) {
     const p = pivot(g, sx * (br - lw), H, sz * (L / 2 - lw * 1.6));
     p.add(mesh(cyl(lw, lw * 0.75, H, 10), m, 0, -H / 2, 0));
+    p.add(mesh(ball(lw * 1.08), m, 0, -H * 0.5, lw * 0.1));                            // knee
     const paw = mesh(ball(lw * 1.05), dark, 0, -H + lw * 0.45, lw * 0.3);
     paw.scale.y = 0.6;
     p.add(paw);
+    for (const k of [-1, 1]) p.add(mesh(ball(lw * 0.42), dark, k * lw * 0.45, -H + lw * 0.3, lw * 1.05));   // toes
     legs.push(p);
   }
   const tl = o.tail || 0.3;
   const tail = pivot(g, 0, by + br * 0.3, -L / 2 + br * 0.2);
   const tm = mesh(cyl(W * 0.04, W * 0.1, tl, 10), dark, 0, 0, -tl / 2);
   tm.rotation.x = Math.PI / 2;
-  tail.add(tm);
+  tail.add(tm, mesh(ball(W * 0.11), mat(mix(o.color, o.mane ? '#3a2208' : '#ffffff', 0.4)), 0, 0, -tl));   // tuft
   tail.rotation.x = 0.5;
+  if (o.wings && o.breath) {                    // a dragon: spines down the back and horns
+    for (let i = 0; i < 6; i++) g.add(mesh(cone(W * 0.08, W * 0.28, 6), mat('#f3e3b3'), 0, by + br * 0.95, L / 2 - W * 0.4 - i * (L - W * 0.4) / 6));
+    for (const k of [-1, 1]) put(head, mesh(cone(W * 0.06, W * 0.5, 8), mat('#f3e3b3'), k * W * 0.18, W * 0.42, -W * 0.25)).rotation.x = -0.6;
+  }
   if (o.wings) {
     // Bat-like wings: a scalloped membrane with a bony leading edge.
     const span = L * 0.85, chord = L * 0.42, shape = new THREE.Shape();
@@ -362,19 +555,36 @@ function buildQuad(o) {
 
 function buildBird(o) {
   const g = new THREE.Group();
-  const m = mat(o.color), dark = mat(mix(o.color, '#000000', 0.3));
+  const m = mat(o.color), dark = mat(mix(o.color, '#000000', 0.3)), pale = mat(mix(o.color, '#ffffff', 0.55));
+  const beakM = mat('#f2a33a');
   const body = mesh(ball(0.22, 1), m, 0, 0.3, 0);
   body.scale.set(1, 0.85, 1.5);
   g.add(body);
-  g.add(mesh(ball(0.14, 1), m, 0, 0.45, 0.28));
-  const beak = mesh(cone(0.05, 0.16, 5), mat('#f2a33a'), 0, 0.43, 0.46);
+  const breast = mesh(ball(0.17), pale, 0, 0.26, 0.14);
+  breast.scale.set(1, 0.9, 1.1);
+  g.add(breast, mesh(ball(0.14, 1), m, 0, 0.45, 0.28));
+  const beak = mesh(cone(0.05, 0.16, 8), beakM, 0, 0.45, 0.46);
   beak.rotation.x = Math.PI / 2;
-  g.add(beak);
-  g.add(mesh(box(0.14, 0.03, 0.3), dark, 0, 0.3, -0.4));
+  const lower = mesh(cone(0.035, 0.11, 8), mat('#d98a2a'), 0, 0.41, 0.44);
+  lower.rotation.x = Math.PI / 2 + 0.25;
+  g.add(beak, lower);
+  for (const s of [-1, 1]) {
+    g.add(mesh(ball(0.03), mat('#fbfbf7'), s * 0.085, 0.48, 0.37), mesh(ball(0.02), mat('#101014'), s * 0.095, 0.485, 0.39));
+    const leg = mesh(cyl(0.012, 0.012, 0.16, 6), beakM, s * 0.07, 0.1, 0.02);
+    g.add(leg);
+    for (const a of [-0.5, 0, 0.5]) put(g, mesh(box(0.012, 0.012, 0.07), beakM, s * 0.07 + Math.sin(a) * 0.03, 0.02, 0.05 + Math.cos(a) * 0.02)).rotation.y = a;
+  }
+  for (let i = 0; i < 3; i++) put(g, mesh(slab([[0, 0], [0.04, 0.1], [0, 0.32], [-0.04, 0.1]], 0.012), dark, (i - 1) * 0.05, 0.31, -0.33)).rotation.set(-Math.PI / 2 + 0.25, 0, (i - 1) * 0.35);
+  put(g, mesh(slab([[0, 0], [0.03, 0.08], [0, 0.14], [-0.03, 0.08]], 0.01), dark, 0, 0.57, 0.24)).rotation.x = -0.4;   // crest
   const wings = [];
+  const wing = slab([[0, -0.15], [0.3, -0.12], [0.55, 0.0], [0.42, 0.08], [0.2, 0.15], [0, 0.15]], 0.03);
+  wing.rotateX(Math.PI / 2);
   for (const s of [-1, 1]) {
     const p = pivot(g, s * 0.14, 0.36, 0);
-    p.add(mesh(box(0.55, 0.035, 0.3), dark, s * 0.28, 0, 0));
+    const w = mesh(wing, dark);
+    w.scale.x = s;
+    p.add(w);
+    for (let i = 0; i < 3; i++) p.add(mesh(box(0.05, 0.02, 0.16), m, s * (0.38 + i * 0.06), 0.01, -0.13 + i * 0.03));   // primaries
     p.userData.side = s;
     wings.push(p);
   }
@@ -384,19 +594,28 @@ function buildBird(o) {
 
 function buildFish(o) {
   const g = new THREE.Group();
-  const m = mat(o.color);
+  const m = mat(o.color, { roughness: 0.4 }), pale = mat(mix(o.color, '#ffffff', 0.55), { roughness: 0.4 });
+  const dark = mat(mix(o.color, '#000000', 0.3));
   const body = mesh(ball(0.3, 1), m, 0, 0, 0);
   body.scale.set(0.55, 0.8, 1.5);
-  g.add(body);
+  const belly = mesh(ball(0.26), pale, 0, -0.08, 0.02);
+  belly.scale.set(0.5, 0.55, 1.4);
+  g.add(body, belly);
   const tail = pivot(g, 0, 0, -0.42);
-  const fin = mesh(cone(0.2, 0.3, 4), m, 0, 0, -0.12);
-  fin.rotation.x = Math.PI / 2;
-  fin.scale.x = 0.3;
+  const fin = mesh(slab([[0, 0], [0.22, -0.2], [0.18, 0], [0.22, 0.2]], 0.02), dark, 0, 0, -0.04);
+  fin.rotation.y = Math.PI / 2;
   tail.add(fin);
-  const top = mesh(cone(0.1, 0.22, 4), m, 0, 0.26, -0.05);
-  top.scale.x = 0.3;
-  g.add(top);
-  for (const s of [-1, 1]) g.add(mesh(ball(0.035, 1), mat('#101014'), s * 0.13, 0.06, 0.3));
+  put(g, mesh(slab([[0, 0], [0.12, 0.2], [0.24, 0]], 0.02), dark, 0, 0.2, 0)).rotation.y = Math.PI / 2;   // dorsal fin
+  for (const s of [-1, 1]) {
+    g.add(mesh(ball(0.05), mat('#fbfbf7'), s * 0.13, 0.06, 0.28), mesh(ball(0.032), mat('#101014'), s * 0.15, 0.06, 0.3));
+    const pec = mesh(slab([[0, 0], [0.12, -0.05], [0.1, 0.05]], 0.015), dark, s * 0.15, -0.06, 0.1);
+    pec.rotation.y = s * 0.6;
+    pec.scale.x = s;
+    g.add(pec);
+    put(g, mesh(new THREE.TorusGeometry(0.14, 0.008, 4, 10, 1.6), dark, s * 0.06, 0, 0.18)).rotation.set(0, s * Math.PI / 2, -0.8);   // gill
+    for (let i = 0; i < 2; i++) g.add(mesh(box(0.01, 0.3, 0.05), dark, s * 0.155, 0, -0.05 - i * 0.14));     // stripes
+  }
+  g.add(mesh(rbox(0.08, 0.02, 0.02, 0.008), mat('#3a1d1d'), 0, -0.05, 0.44));                                   // mouth
   g.userData = { fishTail: tail, height: 0.6 };
   return g;
 }
@@ -428,6 +647,14 @@ function buildBoat(o) {
     g.add(sail);
     g.add(mesh(box(0.05, 0.22, 0.4), mat('#d1495b'), 0, 3.0, -0.1));
   }
+  const wood = mat('#5d3b22');
+  for (const s of [-1, 1]) {
+    g.add(mesh(box(0.05, 0.08, 2.4), wood, s * 0.65, 0.52, 0));
+    put(g, mesh(cyl(0.05, 0.05, 0.03, 10), mat('#bfe0f2', { roughness: 0.1 }), s * 0.66, 0.25, 0.5)).rotation.z = Math.PI / 2;
+  }
+  for (const z of [0.6, -0.6]) g.add(mesh(box(1.1, 0.05, 0.25), mat('#a9774a'), 0, 0.42, z));
+  put(g, mesh(new THREE.TorusGeometry(0.12, 0.035, 6, 14), mat('#d9c38a'), 0.35, 0.5, -0.9)).rotation.x = Math.PI / 2;
+  g.add(mesh(box(0.05, 0.5, 0.3), wood, 0, 0.0, -1.35));
   g.userData = { boat: true, height: o.sail === false || speed ? 1.2 : 3.3 };
   return g;
 }
@@ -439,6 +666,12 @@ function wheel(g, list, x, z, r = 0.27, w = 0.2, tyreColor = '#17171b') {
   const hub = mesh(cyl(r * 0.55, r * 0.55, w * 1.06, 12), mat('#c3c8cf', { metalness: 0.7, roughness: 0.3 }));
   hub.rotation.z = Math.PI / 2;
   p.add(tyre, hub, mesh(box(w * 1.1, r * 1.5, r * 0.16), mat('#6d727a')));
+  if (w < 0.1) {                                   // thin wheels have spokes
+    for (let i = 0; i < 6; i++) put(p, mesh(box(w * 0.4, r * 1.8, 0.012), mat('#c3c8cf', { metalness: 0.7, roughness: 0.3 }))).rotation.x = (i * Math.PI) / 6;
+  } else {
+    for (const k of [-1, 1]) put(p, mesh(new THREE.TorusGeometry(r * 0.97, r * 0.06, 6, 20), mat('#2a2a30'), k * w * 0.3, 0, 0)).rotation.y = Math.PI / 2;   // tread
+    put(p, mesh(cyl(r * 0.2, r * 0.2, w * 1.14, 10), mat('#8a9099', { metalness: 0.8, roughness: 0.25 }))).rotation.z = Math.PI / 2;   // hubcap
+  }
   list.push(p);
 }
 // Occupied vehicles get see-through glass so the riders are visible.
@@ -481,6 +714,18 @@ function buildCar(o, id) {
     g.add(mesh(box(1.22, 0.1, 2.0), mat(v === 'police' ? '#1f3a6e' : '#e03131'), 0, 0.62, 0));
   }
   for (const sx of [-1, 1]) for (const sz of [-1, 1]) wheel(g, wheels, sx * 0.6, sz * 0.85);
+  // mirrors, handles, grille, plates, exhaust, aerial, wipers, a stripe
+  const chrome = mat('#c3c8cf', { metalness: 0.8, roughness: 0.25 }), black = mat('#1d1d22');
+  for (const s of [-1, 1]) {
+    g.add(mesh(rbox(0.07, 0.08, 0.14, 0.02), paint, s * 0.64, 0.98, cz + cl / 2 - 0.05));
+    for (const z of [0.25, -0.45]) g.add(mesh(rbox(0.02, 0.025, 0.12, 0.008), chrome, s * 0.605, 0.68, z));
+    g.add(mesh(box(0.012, 0.06, 2.0), mat(mix(o.color || '#888888', '#ffffff', 0.5)), s * 0.605, 0.52, 0));
+    if (!o.open) put(g, mesh(box(0.02, 0.012, 0.36), black, s * 0.2, 0.79, cz + cl / 2 + 0.02)).rotation.set(0, Math.PI / 2, 0.5);
+  }
+  for (let i = 0; i < 3; i++) g.add(mesh(box(0.6, 0.025, 0.03), chrome, 0, 0.5 + i * 0.05, 1.31));
+  for (const z of [1.34, -1.34]) g.add(mesh(rbox(0.32, 0.1, 0.02, 0.01), mat('#f4f1e1'), 0, 0.42, z));
+  put(g, mesh(cyl(0.035, 0.035, 0.2, 8), chrome, 0.38, 0.38, -1.38)).rotation.x = Math.PI / 2;
+  g.add(mesh(cyl(0.006, 0.006, 0.5, 4), black, -0.45, 0.95, -0.9));
   g.userData = { wheels, height: top + 0.2 };
   return g;
 }
@@ -508,6 +753,13 @@ function buildTruck(o, id) {
   }
   carLights(g, 0.5, 0.85, 2.36, -2.4);
   for (const sx of [-1, 1]) for (const z of [1.7, -0.9, -1.8]) wheel(g, wheels, sx * 0.68, z, 0.36, 0.26);
+  const chrome = mat('#c3c8cf', { metalness: 0.8, roughness: 0.25 }), black = mat('#1d1d22');
+  for (const s of [-1, 1]) {
+    g.add(mesh(rbox(0.08, 0.3, 0.06, 0.02), black, s * 0.82, 1.6, 2.05), mesh(cyl(0.008, 0.008, 0.2, 4), chrome, s * 0.77, 1.6, 2.05));
+    g.add(mesh(cyl(0.05, 0.05, 1.1, 10), chrome, s * 0.62, 1.9, 1.2), mesh(cyl(0.18, 0.18, 0.6, 14), chrome, s * 0.62, 0.62, 0.7));
+    g.add(mesh(box(0.3, 0.06, 0.25), black, s * 0.6, 0.38, 1.75), mesh(box(0.02, 0.35, 0.3), black, s * 0.7, 0.42, -2.3));
+  }
+  for (let i = 0; i < 3; i++) g.add(mesh(box(0.9, 0.04, 0.03), chrome, 0, 0.85 + i * 0.1, 2.37), mesh(ball(0.05), glow('#ffb347', 1.2), (i - 1) * 0.25, 1.86, 2.3));
   g.userData = { wheels, wheelR: 0.36, height: 2.4 };
   return g;
 }
@@ -528,6 +780,11 @@ function buildBus(o) {
   g.add(mesh(box(1.57, 0.12, 5.6), mat('#2b2e35'), 0, 0.5, 0));
   carLights(g, 0.55, 0.75, 2.81, -2.81);
   for (const sx of [-1, 1]) for (const z of [1.8, -1.8]) wheel(g, wheels, sx * 0.72, z, 0.36, 0.26);
+  const chrome = mat('#c3c8cf', { metalness: 0.8, roughness: 0.25 }), black = mat('#1d1d22');
+  if (!o.open) for (const s of [-1, 1]) for (let i = 0; i < 4; i++) g.add(mesh(box(0.03, 0.55, 0.08), paint, s * 0.79, 1.52, -2.0 + i * 1.25));
+  for (const s of [-1, 1]) g.add(mesh(rbox(0.08, 0.32, 0.06, 0.02), black, s * 0.86, 1.6, 2.7), put(new THREE.Group(), mesh(box(0.4, 0.02, 0.02), black, s * 0.3, 1.18, 2.82)));
+  g.add(mesh(rbox(1.0, 0.22, 0.05, 0.02), mat('#1d1d22'), 0, 1.86, 2.81), mesh(box(0.8, 0.12, 0.04), glow('#ffb347', 1.2), 0, 1.86, 2.84));
+  g.add(mesh(rbox(0.9, 0.2, 1.4, 0.05), mat('#d9dee6'), 0, 2.08, -0.5), mesh(box(1.6, 0.12, 0.1), chrome, 0, 0.42, 2.83), mesh(box(1.6, 0.12, 0.1), chrome, 0, 0.42, -2.83));
   g.userData = { wheels, wheelR: 0.36, height: 2.2 };
   return g;
 }
@@ -569,6 +826,19 @@ function buildTrain(o) {
     smoke.push(puff);
     g.add(puff);
   }
+  // boiler bands, bell, whistle, lamp, rails, cow-catcher, rods; windows, doors and couplings on the carriages
+  const brass = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 });
+  for (let i = 0; i < 3; i++) put(g, mesh(new THREE.TorusGeometry(0.61, 0.025, 6, 20), brass, 0, 1.15, 0.4 + i * 0.6)).rotation.y = 0;
+  g.add(mesh(lathe([[0.08, 0], [0.11, 0.1], [0.05, 0.16]], 12), brass, 0, 1.75, 0.4), mesh(cyl(0.03, 0.03, 0.2, 8), brass, 0.25, 1.8, 0.7));
+  g.add(mesh(lathe([[0.14, 0], [0.16, 0.12], [0.1, 0.2]], 12), black, 0, 1.15, 2.35), mesh(ball(0.1), glow('#fff3b0', 1.4), 0, 1.25, 2.42));
+  for (const s of [-1, 1]) g.add(mesh(cyl(0.015, 0.015, 2.0, 6), brass, s * 0.64, 1.3, 1.2), mesh(box(0.04, 0.04, 1.2), mat('#8a9099', { metalness: 0.8, roughness: 0.3 }), s * 0.72, 0.38, 1.0));
+  for (let i = 0; i < 5; i++) put(g, mesh(box(0.05, 0.05, 0.6), mat('#b3262b'), (i - 2) * 0.22, 0.35, 2.45)).rotation.x = -0.5;
+  ['#2e6f8e', '#3b8b6f', '#b9772e'].forEach((c, i) => {
+    const z = -2.9 - i * 2.75;
+    for (const s of [-1, 1]) for (let k = 0; k < 3; k++) g.add(mesh(box(0.05, 0.38, 0.36), mat('#bfe0f2', { roughness: 0.1 }), s * 0.69, 1.45, z - 0.75 + k * 0.75));
+    g.add(mesh(box(1.37, 0.9, 0.06), mat(mix(c, '#000000', 0.25)), 0, 1.15, z - 1.26), mesh(box(0.12, 0.12, 0.5), black, 0, 0.6, z + 1.55));
+    g.add(mesh(rbox(0.5, 0.12, 0.6, 0.04), mat(mix(c, '#ffffff', 0.3)), 0, 1.95, z));
+  });
   outer.userData = { wheels, wheelR: 0.3, smoke, height: 2.4 };
   return outer;
 }
@@ -605,6 +875,16 @@ function buildBike(o, id) {
   rider.userData.legs.forEach((leg, i) => { leg.rotation.x = -0.9; leg.rotation.z = (i ? 1 : -1) * 0.12; });
   rider.userData.arms.forEach((arm) => { arm.rotation.x = -1.15; });
   g.add(rider);
+  const black = mat('#2b2e35'), chrome = mat('#c3c8cf', { metalness: 0.8, roughness: 0.25 });
+  put(g, mesh(cyl(0.09, 0.09, 0.02, 16), chrome, 0.04, 0.38, 0)).rotation.z = Math.PI / 2;         // chain ring
+  g.add(mesh(box(0.012, 0.012, 0.62), black, 0.05, 0.38, -0.31));                                  // chain
+  for (const k of [-1, 1]) {
+    g.add(mesh(box(0.02, 0.16, 0.025), chrome, k * 0.07, 0.38 - k * 0.06, k * 0.03), mesh(rbox(0.09, 0.02, 0.05, 0.008), black, k * 0.11, 0.38 - k * 0.14, k * 0.06));
+    const fender = mesh(new THREE.TorusGeometry(r * 1.08, 0.015, 4, 12, Math.PI * 0.7), mat(o.color || '#d1495b'), 0, r, k * 0.62);
+    fender.rotation.set(0, Math.PI / 2, Math.PI * 0.15);
+    g.add(fender);
+  }
+  g.add(mesh(cyl(0.02, 0.02, 0.02, 8), chrome, 0.2, 1.04, 0.48));
   g.userData = { wheels, wheelR: r, height: 1.95 };
   return g;
 }
@@ -623,6 +903,21 @@ function buildTractor(o) {
     wheel(g, wheels, sx * 0.72, -0.5, 0.62, 0.34);
     wheel(g, wheels, sx * 0.6, 1.0, 0.34, 0.2);
   }
+  const black = mat('#1d1d22');
+  for (const s of [-1, 1]) {
+    for (let i = 0; i < 8; i++) {                   // chunky tread on the big wheels
+      const a = (i / 8) * Math.PI * 2, lug = mesh(box(0.36, 0.12, 0.16), black, s * 0.72, 0.62 + Math.sin(a) * 0.6, -0.5 + Math.cos(a) * 0.6);
+      lug.rotation.x = -a;
+      g.add(lug);
+    }
+    const guard = mesh(new THREE.CylinderGeometry(0.72, 0.72, 0.4, 18, 1, true, 0, Math.PI), paint, s * 0.72, 0.62, -0.5);
+    guard.material = paint.clone();
+    guard.material.side = THREE.DoubleSide;
+    guard.rotation.set(0, 0, Math.PI / 2);                 // an arch over the top of the big wheel
+    g.add(guard, mesh(ball(0.07), glow('#fff3b0', 1.2), s * 0.3, 1.2, 1.31));
+  }
+  put(g, mesh(new THREE.TorusGeometry(0.14, 0.02, 6, 16), black, 0, 1.55, -0.15)).rotation.x = -1.0;   // steering wheel
+  g.add(mesh(rbox(0.4, 0.1, 0.35, 0.04), black, 0, 1.35, -0.75), mesh(cyl(0.08, 0.06, 0.08, 8), black, 0.3, 2.14, 0.9));
   g.userData = { wheels, wheelR: 0.48, height: 2.3 };
   return g;
 }
@@ -649,6 +944,15 @@ function buildHeli(o, id) {
     g.add(mesh(box(0.07, 0.07, 2.0), mat('#2b2e35'), s * 0.55, 0.15, 0.1));
     for (const z of [0.6, -0.4]) g.add(mesh(box(0.05, 0.45, 0.05), mat('#2b2e35'), s * 0.5, 0.4, z));
   }
+  const black = mat('#2b2e35');
+  g.add(mesh(cyl(0.12, 0.12, 0.12, 10), black, 0, 2.25, 0), mesh(rbox(0.7, 0.4, 0.9, 0.12), paint, 0, 1.75, -0.35));   // rotor hub, engine
+  for (const s of [-1, 1]) {
+    g.add(mesh(rbox(0.04, 0.5, 0.45, 0.04), mat('#9fc4dc', { roughness: 0.1 }), s * 0.66, 1.25, 0.1), mesh(ball(0.05), glow(s > 0 ? '#34c759' : '#ff3b30', 2), s * 0.7, 1.1, -0.2));
+    put(g, mesh(cyl(0.05, 0.05, 0.3, 8), black, s * 0.25, 1.6, -0.95)).rotation.x = Math.PI / 2;
+    g.add(mesh(box(0.02, 0.06, 1.2), mat('#ffffff'), s * 0.69, 0.95, -0.2), mesh(box(0.25, 0.04, 0.12), black, s * 0.45, 0.6, 0.3));
+  }
+  put(g, mesh(slab([[0, 0], [0.5, 0.1], [0.4, 0.3], [0, 0.25]], 0.04), paint, 0, 1.35, -3.15)).rotation.y = Math.PI / 2;
+  put(g, mesh(new THREE.TorusGeometry(0.45, 0.025, 4, 16), mat('#2b2e35'), 0.12, 1.7, -3.2)).rotation.y = Math.PI / 2;   // tail-rotor guard
   g.userData = { rotor, tailRotor, height: 2.4 };
   return g;
 }
@@ -671,6 +975,12 @@ function buildShip(o) {
     g.add(mesh(cyl(0.39, 0.39, 0.25, 16), mat('#24272d'), 0, 3.0, z));
   }
   g.add(mesh(cyl(0.04, 0.04, 1.6, 8), mat('#24272d'), 0, 3.2, 1.3));
+  const black = mat('#24272d');
+  for (const s of [-1, 1]) for (let i = 0; i < 5; i++) put(g, mesh(cyl(0.08, 0.08, 0.04, 12), mat('#bfe0f2', { roughness: 0.1 }), s * 1.31, 0.45, 2.2 - i * 1.2)).rotation.z = Math.PI / 2;
+  for (const s of [-1, 1]) g.add(mesh(capsule(0.18, 0.9), mat('#f28c1a'), s * 1.2, 1.95, -1.2));
+  g.children[g.children.length - 1].rotation.x = Math.PI / 2;
+  g.children[g.children.length - 2].rotation.x = Math.PI / 2;
+  g.add(mesh(tube([[0.9, 0.9, 4.0], [1.0, 0.4, 4.1], [0.9, 0.1, 4.0]], 0.04, 8, 5), black), mesh(ball(0.06), glow('#fff3b0', 2), 0, 4.0, 1.3));
   g.userData = { boat: true, height: 3.6 };
   return g;
 }
@@ -691,6 +1001,11 @@ function buildTank() {
   barrel.rotation.x = Math.PI / 2;
   g.add(barrel);
   g.add(mesh(cyl(0.2, 0.2, 0.12, 12), dark, 0.2, 1.6, -0.3));
+  const tread = mat('#24262a');
+  for (const s of [-1, 1]) for (let i = 0; i < 6; i++) g.add(mesh(box(0.52, 0.06, 0.18), tread, s * 0.8, 0.64, -1.4 + i * 0.56));
+  g.add(mesh(cyl(0.25, 0.25, 0.08, 14), olive, -0.25, 1.6, -0.25), mesh(cyl(0.03, 0.03, 0.5, 6), dark, 0.25, 1.85, -0.3));
+  put(g, mesh(cyl(0.03, 0.03, 0.4, 6), dark, -0.25, 1.75, 0.0)).rotation.x = Math.PI / 2;
+  for (const s of [-1, 1]) put(g, mesh(cyl(0.06, 0.06, 0.2, 8), dark, s * 0.4, 0.95, -1.62)).rotation.x = Math.PI / 2;
   g.userData = { height: 1.8 };
   return g;
 }
@@ -711,6 +1026,15 @@ function buildSled() {
   const sack = mesh(ball(0.5), mat('#7a4a2a'), 0, 1.05, -0.5);
   sack.scale.y = 0.9;
   g.add(sack);
+  ['#e63946', '#2a9d8f', '#f2c230', '#8d5fd3'].forEach((c, i) => {
+    g.add(mesh(rbox(0.22, 0.22, 0.22, 0.03), mat(c), (i - 1.5) * 0.24, 1.05 + (i % 2) * 0.12, 0.25));
+  });
+  for (const s of [-1, 1]) {
+    g.add(mesh(ball(0.06), gold, s * 0.56, 0.75, 0.6), mesh(box(0.04, 0.3, 0.04), red, s * 0.56, 1.2, 0.9));
+    put(g, mesh(new THREE.TorusGeometry(0.12, 0.02, 6, 12, Math.PI), gold, s * 0.5, 0.2, 1.3)).rotation.y = Math.PI / 2;
+  }
+  g.add(mesh(cyl(0.03, 0.03, 0.4, 6), gold, 0.6, 1.4, 0.95), mesh(ball(0.07), glow('#ffd98a', 1.6), 0.6, 1.62, 0.95));
+  for (const s of [-1, 1]) g.add(mesh(ball(0.05), gold, s * 0.56, 1.32, 0.9));   // finials
   g.userData = { height: 1.6 };
   return g;
 }
@@ -727,6 +1051,8 @@ function buildCart() {
   const hay = mesh(ball(0.55), mat('#d8b24a'), 0, 1.15, -0.1);
   hay.scale.set(0.9, 0.6, 1.4);
   g.add(hay);
+  for (let i = 0; i < 4; i++) g.add(mesh(box(1.1, 0.02, 0.06), dark, 0, 0.78, -0.95 + i * 0.6));
+  g.add(mesh(cyl(0.03, 0.03, 0.9, 6), dark, 0, 0.7, 2.3), mesh(box(1.0, 0.04, 0.04), dark, 0, 0.7, 2.3));
   g.userData = { wheels, wheelR: 0.46, height: 1.5 };
   return g;
 }
@@ -746,6 +1072,12 @@ function buildRocket() {
   flame.rotation.x = Math.PI;
   flame.castShadow = false;
   g.add(flame);
+  for (const y of [0.6, 2.3]) put(g, mesh(new THREE.TorusGeometry(0.425, 0.03, 6, 24), red, 0, y, 0)).rotation.x = Math.PI / 2;
+  g.add(mesh(ball(0.13), mat('#6ec5ff', { roughness: 0.15 }), 0, 1.4, 0.38), mesh(lathe([[0.2, 0], [0.32, 0.25], [0.36, 0.5]], 14), mat('#3a3d44', { metalness: 0.7, roughness: 0.3 }), 0, 0.0, 0));
+  g.children[g.children.length - 1].rotation.x = Math.PI;
+  g.children[g.children.length - 1].position.y = 0.5;
+  for (let i = 0; i < 3; i++) { const a = (i * Math.PI * 2) / 3; g.add(mesh(ball(0.05), red, Math.sin(a) * 0.98, 0.3, Math.cos(a) * 0.98)); }
+  g.add(mesh(cyl(0.012, 0.012, 0.35, 4), red, 0, 3.4, 0));
   g.userData = { flame, height: 3.4 };
   return g;
 }
@@ -761,6 +1093,14 @@ function buildPlane() {
   g.add(mesh(box(0.06, 0.5, 0.36), red, 0, 0.7, -1.15));
   const prop = mesh(box(1.0, 0.08, 0.03), mat('#30343c'), 0, 0.4, 1.33);
   g.add(prop);
+  const black = mat('#30343c');
+  put(g, mesh(dome(0.22, 0.5), mat('#9fc4dc', { roughness: 0.1 }), 0, 0.62, 0.45)).scale.z = 1.6;
+  for (const s of [-1, 1]) {
+    put(g, mesh(cyl(0.11, 0.09, 0.5, 12), white, s * 1.0, 0.3, 0.35)).rotation.x = Math.PI / 2;
+    g.add(mesh(cyl(0.02, 0.02, 0.3, 6), black, s * 0.4, 0.15, 0.3), mesh(cyl(0.08, 0.08, 0.06, 12), black, s * 0.4, 0.0, 0.3));
+  }
+  g.add(mesh(cyl(0.02, 0.02, 0.25, 6), black, 0, 0.18, -0.9), mesh(cyl(0.06, 0.06, 0.05, 10), black, 0, 0.05, -0.9));
+  g.add(mesh(box(3.62, 0.072, 0.1), white, 0, 0.4, 0.05), mesh(cyl(0.07, 0.07, 0.1, 10), black, 0, 0.4, 1.33));
   g.userData = { prop, height: 1.1 };
   return g;
 }
@@ -775,6 +1115,14 @@ function buildUfo() {
     const a = (i * Math.PI) / 3;
     g.add(mesh(ball(0.09, 1), glow(i % 2 ? '#ffd166' : '#ff5d8f', 2), Math.cos(a) * 1.05, 0.42, Math.sin(a) * 1.05));
   }
+  const steel = mat('#8a94a0', { metalness: 0.8, roughness: 0.3 });
+  put(g, mesh(new THREE.TorusGeometry(1.25, 0.06, 8, 32), steel, 0, 0.45, 0)).rotation.x = Math.PI / 2;
+  for (let i = 0; i < 3; i++) {
+    const a = (i * Math.PI * 2) / 3, leg = mesh(cyl(0.03, 0.04, 0.55, 6), steel, Math.cos(a) * 0.7, 0.18, Math.sin(a) * 0.7);
+    leg.rotation.set(Math.sin(a) * 0.3, 0, -Math.cos(a) * 0.3);
+    g.add(leg, mesh(cyl(0.12, 0.12, 0.04, 10), steel, Math.cos(a) * 0.8, -0.08, Math.sin(a) * 0.8));
+  }
+  g.add(mesh(cyl(0.01, 0.01, 0.4, 4), steel, 0, 1.4, 0), mesh(ball(0.05), glow('#ff5d8f', 2), 0, 1.6, 0));
   g.userData = { height: 1.3, spin: disc };
   return g;
 }
@@ -790,6 +1138,12 @@ function buildBalloon(o, id) {
   for (const [x, z] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
     g.add(mesh(cyl(0.015, 0.015, 1.0, 4), mat('#3a2a1c'), x * 0.3, 0.95, z * 0.3));
   }
+  for (let i = 0; i < 6; i++) {                     // painted gores down the envelope
+    const band = mesh(new THREE.SphereGeometry(1.61, 16, 12, (i * Math.PI) / 3, 0.18), mat('#fbfbf7'), 0, 3.6, 0);
+    band.scale.y = 1.2;
+    g.add(band);
+  }
+  g.add(mesh(cyl(0.38, 0.38, 0.05, 16), mat('#5d3b22'), 0, 0.5, 0), mesh(cyl(0.08, 0.1, 0.25, 10), mat('#3a3d44', { metalness: 0.7, roughness: 0.3 }), 0, 1.3, 0));
   g.userData = { height: 5.6 };
   return g;
 }
@@ -835,6 +1189,8 @@ function makeActor(spec, n, stage) {
   const s = o.scale || 1;
   const g = BUILDERS[base](o, spec.id + n);
   const ud = g.userData;
+  const keep = new Set([ud.head, ud.lips, ud.breath, ud.flame, ud.prop, ud.spin, ud.tailRotor, ...(ud.smoke || [])].filter(Boolean));
+  bakeStatic(g, keep);
   const wrap = new THREE.Group();
   const scaled = new THREE.Group();
   scaled.scale.setScalar(s);
@@ -1370,77 +1726,134 @@ function makeActor(spec, n, stage) {
 // ---------------------------------------------------------------- scenery
 function tree(R, snowy, palm) {
   const g = new THREE.Group();
-  const h = 1.4 + R() * 1.4;
+  const h = 1.4 + R() * 1.4, bark = mat('#6b4a2b', { roughness: 1 });
   const green = snowy ? '#e9f1f5' : mix('#3e8b3a', '#7cb342', R());
-  g.add(mesh(cyl(0.16, 0.24, h, 6), mat('#6b4a2b'), 0, h / 2, 0));
   if (palm) {
-    for (let i = 0; i < 6; i++) {
-      const leaf = mesh(box(0.35, 0.06, 1.7), mat('#4c9a4a'), 0, h, 0);
-      leaf.rotation.set(0.5, (i * Math.PI) / 3, 0, 'YXZ');
-      leaf.translateZ(0.8);
+    const lean = 0.25 + R() * 0.2;
+    const trunk = mesh(tube([[0, 0, 0], [lean * 0.3, h * 0.4, 0], [lean, h, 0]], 0.13, 16, 8), bark);
+    g.add(trunk);
+    for (let i = 1; i < 7; i++) {                       // the ringed bark of a palm
+      const u = i / 7, ring = mesh(new THREE.TorusGeometry(0.14, 0.035, 6, 12), mat('#7d5a3a'), lean * u * u, h * u, 0);
+      ring.rotation.x = Math.PI / 2;
+      g.add(ring);
+    }
+    for (let i = 0; i < 3; i++) g.add(mesh(ball(0.11), mat('#5a3d22'), lean + Math.cos(i * 2.1) * 0.13, h - 0.12, Math.sin(i * 2.1) * 0.13));
+    const frond = slab([[0, 0], [0.18, 0.5], [0.12, 1.1], [0, 1.8], [-0.12, 1.1], [-0.18, 0.5]], 0.03);
+    for (let i = 0; i < 7; i++) {
+      const leaf = mesh(frond, mat(i % 2 ? '#4c9a4a' : '#5fae4f', { side: THREE.DoubleSide }), lean, h, 0);
+      leaf.rotation.set(0, (i * Math.PI * 2) / 7, 0, 'YXZ');
+      leaf.rotateX(-Math.PI / 2 + 0.55);
       g.add(leaf);
     }
   } else {
-    const crown = 1.0 + R() * 0.4;
-    g.add(mesh(ball(crown), mat(green, { roughness: 1 }), 0, h + crown * 0.7, 0));
-    for (let i = 0; i < 5; i++) {                       // a clumpy canopy rather than one ball
-      const a = (i / 5) * 6.28 + R(), k = crown * (0.55 + R() * 0.25);
-      const shade = snowy ? '#e9f1f5' : mix(green, i % 2 ? '#2f6b2c' : '#9ccc65', 0.25);
-      g.add(mesh(ball(k), mat(shade, { roughness: 1 }), Math.cos(a) * crown * 0.7, h + crown * (0.45 + R() * 0.6), Math.sin(a) * crown * 0.7));
+    g.add(mesh(lathe([[0.32, 0], [0.22, 0.15], [0.17, h * 0.5], [0.13, h]], 10), bark));      // trunk with a flared foot
+    for (let i = 0; i < 3; i++) {
+      const a = i * 2.1 + R(), root = mesh(cone(0.09, 0.45, 6), bark, Math.cos(a) * 0.2, 0.06, Math.sin(a) * 0.2);
+      root.rotation.set(Math.sin(a) * 1.3, 0, -Math.cos(a) * 1.3);
+      g.add(root);
     }
-    const branch = mesh(cyl(0.05, 0.08, 0.9, 6), mat('#6b4a2b'), 0.3, h * 0.85, 0);
-    branch.rotation.z = -0.8;
-    g.add(branch);
+    const crown = 1.0 + R() * 0.4;
+    for (let i = 0; i < 3; i++) {                       // boughs reaching into the canopy
+      const a = i * 2.1 + R();
+      g.add(mesh(tube([[0, h * 0.7, 0], [Math.cos(a) * 0.35, h * 0.9, Math.sin(a) * 0.35], [Math.cos(a) * crown * 0.6, h + crown * 0.4, Math.sin(a) * crown * 0.6]], 0.05, 8, 5), bark));
+    }
+    g.add(mesh(blob(crown), mat(green, { roughness: 1 }), 0, h + crown * 0.7, 0));
+    for (let i = 0; i < 8; i++) {                       // a clumpy canopy rather than one ball
+      const a = (i / 8) * 6.28 + R(), k = crown * (0.5 + R() * 0.25), up = i % 2 ? 0.95 : 0.45;
+      const shade = snowy ? '#e9f1f5' : mix(green, i % 3 === 0 ? '#2f6b2c' : i % 3 === 1 ? '#9ccc65' : green, 0.3);
+      g.add(mesh(blob(k), mat(shade, { roughness: 1 }), Math.cos(a) * crown * 0.72, h + crown * (up + R() * 0.3), Math.sin(a) * crown * 0.72));
+    }
+    if (!snowy && R() < 0.35) for (let i = 0; i < 4; i++) {   // some trees carry fruit
+      const a = i * 1.7 + R();
+      g.add(mesh(ball(0.08), mat(R() < 0.5 ? '#d62828' : '#f28c1a'), Math.cos(a) * crown * 0.95, h + crown * (0.4 + R() * 0.5), Math.sin(a) * crown * 0.95));
+    }
   }
   g.scale.setScalar(1 + R() * 0.8);
   return g;
 }
 function pine(R, snowy) {
   const g = new THREE.Group();
-  const green = snowy ? '#eaf2f6' : mix('#1f5c3a', '#2f7d4a', R());
-  g.add(mesh(cyl(0.14, 0.2, 1, 6), mat('#5b3d24'), 0, 0.5, 0));
-  for (let i = 0; i < 3; i++) g.add(mesh(cone(1.25 - i * 0.32, 1.5, 7), mat(green), 0, 1.5 + i * 0.95, 0));
+  const green = snowy ? '#eaf2f6' : mix('#1f5c3a', '#2f7d4a', R()), dark = mix(green, '#0f3a22', 0.35);
+  g.add(mesh(lathe([[0.26, 0], [0.18, 0.12], [0.13, 1.1], [0.09, 1.4]], 8), mat('#5b3d24', { roughness: 1 })));
+  for (let i = 0; i < 2; i++) put(g, mesh(cone(0.07, 0.35, 5), mat('#5b3d24'), (i ? -1 : 1) * 0.2, 0.05, i ? 0.1 : -0.1)).rotation.z = (i ? 1 : -1) * 1.2;
+  for (let i = 0; i < 5; i++) {
+    const r = 1.3 - i * 0.22, y = 1.25 + i * 0.62;
+    g.add(mesh(cone(r, 1.1, 9), mat(i % 2 ? green : dark), 0, y, 0));
+    if (snowy || i % 2 === 0) g.add(mesh(cone(r * 0.72, 0.3, 9), mat(snowy ? '#ffffff' : mix(green, '#5fa35f', 0.4)), 0, y + 0.42, 0));
+  }
+  g.add(mesh(cone(0.18, 0.5, 6), mat(dark), 0, 4.45, 0));
   g.scale.setScalar(1 + R() * 0.9);
   return g;
 }
 function rock(R, color = '#8a8d93') {
-  const r = mesh(ico(0.5 + R() * 0.9, 1), flat(color));
-  r.scale.set(1 + R() * 0.6, 0.6 + R() * 0.4, 1 + R() * 0.6);
-  r.rotation.y = R() * 6;
-  r.position.y = 0.15;
-  return r;
+  const g = new THREE.Group();
+  const main = mesh(R() < 0.5 ? ico(0.5 + R() * 0.9, 1) : dodeca(0.5 + R() * 0.9), flat(color));
+  main.scale.set(1 + R() * 0.6, 0.6 + R() * 0.4, 1 + R() * 0.6);
+  main.rotation.y = R() * 6;
+  g.add(main);
+  for (let i = 0; i < 3; i++) {                        // loose stones round the foot
+    const a = R() * 6.28, p = mesh(ico(0.12 + R() * 0.12, 0), flat(mix(color, '#5e6066', R() * 0.5)), Math.cos(a) * 1.1, -0.08, Math.sin(a) * 1.1);
+    p.rotation.set(R() * 3, R() * 3, 0);
+    g.add(p);
+  }
+  if (color === '#8a8d93') {                           // moss on the top
+    const moss = mesh(dome(0.45 + R() * 0.3, 0.35), mat('#5f8a3a', { roughness: 1 }), 0, 0.25, 0);
+    moss.scale.y = 0.4;
+    g.add(moss);
+  }
+  g.position.y = 0.15;
+  return g;
 }
 function flowers(R) {
   const g = new THREE.Group();
   const colors = ['#ff6b8b', '#ffd166', '#c084fc', '#ffffff', '#ff8c42'];
+  const leaf = slab([[0, 0], [0.04, 0.05], [0, 0.12], [-0.04, 0.05]], 0.006);
   for (let i = 0; i < 6; i++) {
     const x = (R() - 0.5) * 1.6, z = (R() - 0.5) * 1.6, h = 0.25 + R() * 0.25;
     g.add(mesh(cyl(0.015, 0.015, h, 4), mat('#3f8f3f'), x, h / 2, z));
-    g.add(mesh(ball(0.08, 0), mat(colors[Math.floor(R() * colors.length)]), x, h, z));
+    const petals = mesh(ball(0.08, 0), mat(colors[Math.floor(R() * colors.length)]), x, h, z);
+    petals.scale.y = 0.55;
+    g.add(petals, mesh(ball(0.035, 0), mat('#f6c02e'), x, h + 0.035, z));
+    put(g, mesh(leaf, mat('#4c9a4a', { side: THREE.DoubleSide }), x, h * 0.4, z)).rotation.set(0.5, R() * 6, 0.6);
   }
   return g;
 }
 function cactus(R) {
-  const g = new THREE.Group(), m = mat('#4f9a5a');
+  const g = new THREE.Group(), m = mat('#4f9a5a'), spine = mat('#f4efe2');
   const h = 1.6 + R() * 1.4;
-  g.add(mesh(cyl(0.25, 0.28, h, 8), m, 0, h / 2, 0));
+  g.add(mesh(capsule(0.26, h - 0.3), m, 0, h / 2, 0));
   for (const s of [-1, 1]) {
-    g.add(mesh(box(0.5, 0.18, 0.18), m, s * 0.4, h * (0.45 + R() * 0.2), 0));
-    g.add(mesh(cyl(0.1, 0.1, 0.6, 6), m, s * 0.62, h * 0.55 + 0.3, 0));
+    const y = h * (0.45 + R() * 0.2);
+    g.add(mesh(tube([[0, y, 0], [s * 0.45, y, 0], [s * 0.6, y + 0.15, 0], [s * 0.6, y + 0.6, 0]], 0.1, 12, 8), m));
+    g.add(mesh(ball(0.1), m, s * 0.6, y + 0.6, 0));
   }
+  for (let i = 0; i < 6; i++) {                        // ribs and spines
+    const a = (i / 6) * 6.28;
+    g.add(mesh(box(0.012, h * 0.75, 0.012), spine, Math.cos(a) * 0.265, h * 0.48, Math.sin(a) * 0.265));
+  }
+  if (R() < 0.6) g.add(mesh(ball(0.09, 0), mat('#ff5d8f'), 0, h + 0.02, 0));   // a flower on top
   return g;
 }
 function house(R, night) {
   const g = new THREE.Group();
   const wall = ['#f2e2c4', '#e8c9a0', '#d9d4c7', '#f0d9d0'][Math.floor(R() * 4)];
+  const roofC = ['#a23e3e', '#7a4a2f', '#4f6a7d'][Math.floor(R() * 3)], trim = mat('#f7f3ea'), wood = mat('#6b4226');
   g.add(mesh(box(3.2, 2.2, 2.8), mat(wall), 0, 1.1, 0));
-  const roof = mesh(cone(2.7, 1.6, 4), mat(['#a23e3e', '#7a4a2f', '#4f6a7d'][Math.floor(R() * 3)]), 0, 3.0, 0);
+  g.add(mesh(box(3.3, 0.25, 2.9), mat(mix(wall, '#6d6a66', 0.35)), 0, 0.12, 0));                     // stone footing
+  const roof = mesh(cone(2.7, 1.6, 4), mat(roofC), 0, 3.0, 0);
   roof.rotation.y = Math.PI / 4;
-  g.add(roof);
-  g.add(mesh(box(0.6, 1.15, 0.08), mat('#6b4226'), 0, 0.58, 1.42));
+  g.add(roof, mesh(box(0.12, 0.12, 2.0), mat(mix(roofC, '#000000', 0.3)), 0, 3.75, 0));          // ridge
+  g.add(mesh(box(0.66, 1.2, 0.08), trim, 0, 0.6, 1.42), mesh(box(0.56, 1.1, 0.1), wood, 0, 0.58, 1.43));
+  g.add(mesh(ball(0.04), mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), 0.18, 0.6, 1.5), mesh(box(0.9, 0.12, 0.35), mat('#9a9da3'), 0, 0.06, 1.55));
   const win = night ? glow('#ffd98a', 1.6) : mat('#a8d4f0', { roughness: 0.2 });
-  for (const s of [-1, 1]) g.add(mesh(box(0.55, 0.55, 0.08), win, s * 1.0, 1.35, 1.42));
-  g.add(mesh(box(0.4, 0.9, 0.4), mat('#8a6f5a'), 0.8, 3.2, -0.3));
+  for (const s of [-1, 1]) {
+    g.add(mesh(box(0.62, 0.62, 0.06), trim, s * 1.0, 1.35, 1.42), mesh(box(0.52, 0.52, 0.08), win, s * 1.0, 1.35, 1.43));
+    g.add(mesh(box(0.04, 0.52, 0.1), trim, s * 1.0, 1.35, 1.44), mesh(box(0.52, 0.04, 0.1), trim, s * 1.0, 1.35, 1.44));
+    for (const k of [-1, 1]) g.add(mesh(box(0.2, 0.6, 0.05), mat(roofC), s * 1.0 + k * 0.43, 1.35, 1.44));   // shutters
+    g.add(mesh(box(0.6, 0.12, 0.18), wood, s * 1.0, 1.0, 1.5));                                                // flower box
+    for (let i = 0; i < 3; i++) g.add(mesh(ball(0.06, 0), mat(['#ff6b8b', '#ffd166', '#c084fc'][i]), s * 1.0 + (i - 1) * 0.18, 1.1, 1.52));
+  }
+  g.add(mesh(box(0.4, 0.9, 0.4), mat('#8a6f5a'), 0.8, 3.2, -0.3), mesh(box(0.5, 0.08, 0.5), mat('#6d5a4a'), 0.8, 3.68, -0.3));
   return g;
 }
 function castle(R, night) {
@@ -1457,6 +1870,20 @@ function castle(R, night) {
   g.add(mesh(box(1.8, 2.6, 0.2), mat('#4a3120'), 0, 1.3, 4.55));
   const win = night ? glow('#ffd98a', 1.6) : mat('#2a2f3a');
   for (const s of [-1, 1]) g.add(mesh(box(0.5, 0.9, 0.1), win, s * 0.9, 5.6, 2.02));
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  const stoneC = mat('#a5a8af');
+  for (let k = 0; k < 4; k++) for (let i = 0; i < 5; i++) {                // battlements along the walls
+    const t = (i - 2) * 1.5, merlon = mesh(box(0.7, 0.7, 0.7), stoneC, 0, 4.35, 0);
+    if (k === 0) merlon.position.set(t, 4.35, 4.5); else if (k === 1) merlon.position.set(t, 4.35, -4.5);
+    else if (k === 2) merlon.position.set(4.5, 4.35, t); else merlon.position.set(-4.5, 4.35, t);
+    g.add(merlon);
+  }
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+    g.add(mesh(cyl(0.04, 0.04, 1.2, 4), mat('#5d3b22'), sx * 4.5, 10.0, sz * 4.5));
+    put(g, mesh(slab([[0, 0], [0.7, 0.2], [0, 0.45]], 0.02), mat('#e63946', { side: THREE.DoubleSide }), sx * 4.5, 10.1, sz * 4.5)).rotation.y = Math.PI / 2;
+  }
+  put(g, mesh(box(1.8, 0.1, 2.6), mat('#6b4a2b'), 0, 0.05, 5.8)).rotation.x = 0.0;
   return g;
 }
 function tower(R, night) {
@@ -1473,6 +1900,11 @@ function tower(R, night) {
     light.position.y = 8.5;
     g.add(light);
   }
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  for (let i = 0; i < 3; i++) g.add(mesh(rbox(0.3, 0.45, 0.06, 0.03), mat('#2a2f3a'), 0, 2.2 + i * 1.8, 1.0 - i * 0.12));
+  for (let i = 0; i < 6; i++) { const a = (i / 6) * Math.PI * 2; g.add(mesh(cyl(0.03, 0.03, 0.4, 6), mat('#30343c'), Math.cos(a) * 0.9, 8.3, Math.sin(a) * 0.9)); }
+  g.add(mesh(rbox(0.5, 0.9, 0.08, 0.04), mat('#5d3b22'), 0, 0.45, 1.08));
   return g;
 }
 function tent() {
@@ -1481,6 +1913,14 @@ function tent() {
   t.rotation.y = Math.PI / 4;
   g.add(t);
   g.add(mesh(box(0.7, 1.2, 0.05), mat('#3a2a1c'), 0, 0.6, 1.0));
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  g.add(mesh(cyl(0.04, 0.04, 2.6, 6), _w, 0, 1.3, 0), mesh(cyl(0.02, 0.02, 0.3, 4), _w, 0, 2.55, 0));
+  for (const s of [-1, 1]) {
+    put(g, mesh(cyl(0.008, 0.008, 2.2, 4), mat('#e9e4d8'), s * 1.9, 1.0, 0)).rotation.z = s * 0.9;
+    g.add(mesh(cone(0.04, 0.2, 4), _w, s * 2.7, 0.05, 0));
+  }
+  put(g, mesh(slab([[0, 0], [0.35, 0], [0, 1.2]], 0.03), mat('#e0904a', { side: THREE.DoubleSide }), 0.35, 0, 1.0)).rotation.y = -0.6;
   return g;
 }
 function campfire(R, night, anims) {
@@ -1506,6 +1946,9 @@ function campfire(R, night, anims) {
     flames.forEach((f, i) => { f.scale.y = 1 + Math.sin(t * (9 + i * 3) + i) * 0.25; });
     light.intensity = k * (0.85 + Math.sin(t * 13) * 0.1 + Math.sin(t * 7.3) * 0.08);
   });
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  for (let i = 0; i < 8; i++) { const a = (i / 8) * Math.PI * 2; g.add(mesh(ico(0.1, 0), flat('#6d7078'), Math.cos(a) * 0.55, 0.05, Math.sin(a) * 0.55)); }
   return g;
 }
 function chest() {
@@ -1517,6 +1960,13 @@ function chest() {
   g.add(lid);
   g.add(mesh(box(0.8, 0.14, 0.5), gold, 0, 0.5, 0));
   for (let i = 0; i < 5; i++) g.add(mesh(ball(0.09, 0), gold, (i - 2) * 0.15, 0.62, (i % 2) * 0.12 - 0.06));
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  const goldB = mat('#f5c542', { metalness: 0.8, roughness: 0.3 });
+  for (const x of [-0.3, 0.3]) g.add(mesh(box(0.06, 0.52, 0.62), goldB, x, 0.25, 0));
+  g.add(mesh(rbox(0.12, 0.14, 0.04, 0.02), goldB, 0, 0.38, 0.31));
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) g.add(mesh(box(0.08, 0.08, 0.08), goldB, sx * 0.43, 0.04, sz * 0.28));
+  g.add(mesh(gem(0.06), mat('#e0242c', { roughness: 0.1 }), -0.1, 0.66, 0.05), mesh(gem(0.05), mat('#2e86ab', { roughness: 0.1 }), 0.15, 0.66, -0.05));
   return g;
 }
 function crystal(R, night, anims) {
@@ -1529,6 +1979,14 @@ function crystal(R, night, anims) {
   light.position.y = 1.3;
   g.add(light);
   anims.push((t) => { c.rotation.y = t * 1.2; c.position.y = 1.3 + Math.sin(t * 1.5) * 0.15; });
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  for (let i = 0; i < 4; i++) {
+    const a = i * 1.6, c = mesh(gem(0.15 + (i % 2) * 0.08), mat('#7ae7ff', { emissive: '#7ae7ff', emissiveIntensity: 1.2, flatShading: true }), Math.cos(a) * 0.45, 0.2, Math.sin(a) * 0.45);
+    c.scale.y = 1.8;
+    c.rotation.z = Math.cos(a) * 0.4;
+    g.add(c);
+  }
   return g;
 }
 function lamp(R, night) {
@@ -1538,6 +1996,11 @@ function lamp(R, night) {
   const light = new THREE.PointLight('#ffe7a3', night ? 25 : 3, 20);
   light.position.y = 2.5;
   g.add(light);
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  g.add(mesh(cyl(0.16, 0.2, 0.15, 10), _d, 0, 0.08, 0), mesh(cone(0.26, 0.2, 8), _d, 0, 2.78, 0));
+  for (const y of [0.6, 2.25]) g.add(mesh(cyl(0.08, 0.08, 0.06, 8), _d, 0, y, 0));
+  put(g, mesh(cyl(0.02, 0.02, 0.4, 4), _d, 0.15, 2.2, 0)).rotation.z = 0.7;
   return g;
 }
 function bridge() {
@@ -1550,12 +2013,25 @@ function bridge() {
     for (const z of [-0.95, 0.95]) g.add(mesh(box(0.08, 0.7, 0.08), dark, i * 0.7, y + 0.4, z));
   }
   for (const z of [-0.95, 0.95]) g.add(mesh(box(5.8, 0.07, 0.07), dark, 0, 1.55, z));
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  const woodB = mat('#8b5a36');
+  g.children.slice().forEach((c) => {
+    if (c.geometry && c.geometry.type === 'BoxGeometry' && Math.abs(c.geometry.parameters.height - 0.7) < 0.01) g.add(mesh(cone(0.07, 0.12, 4), woodB, c.position.x, c.position.y + 0.41, c.position.z));
+  });
+  for (const s of [-1, 1]) g.add(mesh(cyl(0.02, 0.02, 0.3, 4), _d, s * 2.8, 1.75, 0.95), mesh(ball(0.08), glow('#ffd98a', 1.4), s * 2.8, 1.55, 0.95));
+  put(g, mesh(box(7, 0.04, 2.4), mat('#4aa3d8', { transparent: true, opacity: 0.75, roughness: 0.15 }), 0, -0.02, 0)).rotation.y = 0;
+  for (let i = 0; i < 8; i++) g.add(mesh(ico(0.25 + (i % 3) * 0.08, 0), flat('#8a8d93'), (i < 4 ? -1 : 1) * (3.0 + (i % 4) * 0.3), 0.1, (i % 4 - 1.5) * 0.6));
   return g;
 }
 function fence() {
   const g = new THREE.Group(), wood = mat('#b08a5a');
   for (let i = -4; i <= 4; i++) g.add(mesh(box(0.12, 0.95, 0.12), wood, i * 0.9, 0.47, 0));
   for (const y of [0.35, 0.72]) g.add(mesh(box(7.4, 0.09, 0.06), wood, 0, y, 0));
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  for (let i = -4; i <= 4; i++) g.add(mesh(cone(0.09, 0.14, 4), mat('#b08a5a'), i * 0.9, 1.02, 0).rotateY(Math.PI / 4));
+  for (const s of [-1, 1]) g.add(mesh(box(0.06, 0.8, 0.06), mat('#9a7448'), s * 3.6, 0.5, 0.05));
   return g;
 }
 function well() {
@@ -1566,6 +2042,12 @@ function well() {
   const roof = mesh(cone(1.15, 0.7, 4), mat('#a23e3e'), 0, 2.5, 0);
   roof.rotation.y = Math.PI / 4;
   g.add(roof);
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  for (let i = 0; i < 10; i++) { const a = (i / 10) * Math.PI * 2; g.add(mesh(rbox(0.36, 0.2, 0.2, 0.05), mat(i % 2 ? '#8d9096' : '#a3a6ac'), Math.cos(a) * 0.82, 0.8, Math.sin(a) * 0.82).rotateY(-a)); }
+  put(g, mesh(cyl(0.05, 0.05, 1.5, 8), _w, 0, 2.0, 0)).rotation.z = Math.PI / 2;
+  g.add(mesh(box(0.05, 0.3, 0.05), _w, 0.8, 1.85, 0), mesh(cyl(0.006, 0.006, 0.9, 4), mat('#d9c38a'), 0, 1.5, 0));
+  g.add(mesh(cyl(0.12, 0.09, 0.18, 10), _w, 0, 1.0, 0), mesh(new THREE.TorusGeometry(0.1, 0.008, 4, 10, Math.PI), _fe, 0, 1.12, 0));
   return g;
 }
 function statue() {
@@ -1576,6 +2058,12 @@ function statue() {
   const arm = mesh(box(0.14, 0.9, 0.14), stone, 0.42, 2.45, 0);
   arm.rotation.z = -0.5;
   g.add(arm);
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  const stoneS = mat('#b9bcc2');
+  g.add(mesh(box(1.42, 0.12, 1.42), stoneS, 0, 0.92, 0), mesh(box(1.42, 0.12, 1.42), stoneS, 0, 0.06, 0));
+  put(g, mesh(box(0.14, 0.8, 0.14), stoneS, -0.38, 2.0, 0)).rotation.z = 0.25;
+  g.add(mesh(rbox(0.6, 0.1, 0.02, 0.02), _au, 0, 0.6, 0.66), mesh(cone(0.18, 0.3, 5), stoneS, 0, 3.05, 0));
   return g;
 }
 function windmill(R, night, anims) {
@@ -1591,6 +2079,13 @@ function windmill(R, night, anims) {
     blade.add(mesh(box(0.7, 2.4, 0.04), mat('#f7f3e8'), 0.4, 1.9, 0));
   }
   anims.push((t) => { hub.rotation.z = -t * 0.9; });
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  g.add(mesh(rbox(0.8, 1.25, 0.08, 0.05), mat('#efe6d3'), 0, 0.62, 1.48), mesh(rbox(0.4, 0.5, 0.06, 0.04), mat('#a8d4f0'), 0, 2.6, 1.32));
+  g.add(mesh(rbox(0.35, 0.45, 0.06, 0.04), mat('#a8d4f0'), 0.6, 1.6, 1.25).rotateY(0.4));
+  put(g, mesh(new THREE.TorusGeometry(1.25, 0.04, 4, 24), mat('#6b4226'), 0, 3.6, 0)).rotation.x = Math.PI / 2;
+  for (let i = 0; i < 6; i++) { const a = (i / 6) * Math.PI * 2; g.add(mesh(cyl(0.025, 0.025, 0.4, 4), mat('#6b4226'), Math.cos(a) * 1.25, 3.8, Math.sin(a) * 1.25)); }
+  g.add(mesh(cyl(1.75, 1.8, 0.2, 10), mat('#9a9da3'), 0, 0.1, 0));
   return g;
 }
 function bench() {
@@ -1598,6 +2093,11 @@ function bench() {
   g.add(mesh(box(1.8, 0.1, 0.5), wood, 0, 0.5, 0));
   g.add(mesh(box(1.8, 0.5, 0.08), wood, 0, 0.85, -0.22));
   for (const s of [-1, 1]) g.add(mesh(box(0.1, 0.5, 0.45), mat('#33363d'), s * 0.75, 0.25, 0));
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  for (let i = 0; i < 3; i++) g.add(mesh(rbox(1.8, 0.06, 0.12, 0.02), mat('#9a6a3c'), 0, 0.57, -0.15 + i * 0.15));
+  for (const y of [0.75, 0.95]) g.add(mesh(rbox(1.8, 0.1, 0.06, 0.02), mat('#9a6a3c'), 0, y, -0.18));
+  for (const s of [-1, 1]) g.add(mesh(rbox(0.08, 0.06, 0.5, 0.02), mat('#33363d'), s * 0.85, 0.72, 0), mesh(box(0.06, 0.2, 0.06), mat('#33363d'), s * 0.85, 0.62, 0.2));
   return g;
 }
 function fountain(R, night, anims) {
@@ -1612,6 +2112,16 @@ function fountain(R, night, anims) {
     const k = (t * 0.9 + i / drops.length) % 1, a = i * 2.4;
     d.position.set(Math.cos(a) * k * 1.1, 1.8 + k * 1.6 - k * k * 2.9, Math.sin(a) * k * 1.1);
   }));
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  const stoneF = mat('#a8abb1');
+  put(g, mesh(new THREE.TorusGeometry(1.72, 0.1, 8, 32), stoneF, 0, 0.52, 0)).rotation.x = Math.PI / 2;
+  put(g, mesh(new THREE.TorusGeometry(0.7, 0.06, 6, 20), stoneF, 0, 1.8, 0)).rotation.x = Math.PI / 2;
+  g.add(mesh(lathe([[0.25, 0], [0.12, 0.2], [0.06, 0.45], [0.001, 0.5]], 12), stoneF, 0, 1.8, 0), mesh(cyl(0.04, 0.04, 0.12, 6), stoneF, 0, 2.3, 0));
+  g.add(mesh(cyl(2.0, 2.05, 0.12, 20), mat('#9a9da3'), 0, 0.06, 0));
+  for (let i = 0; i < 4; i++) g.add(mesh(cyl(0.04, 0.04, 0.01, 10), mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), Math.cos(i * 1.7) * 0.9, 0.48, Math.sin(i * 1.7) * 0.9));
+  for (let i = 0; i < 3; i++) g.add(mesh(cyl(0.2, 0.2, 0.015, 12), mat('#4c9a4a'), Math.cos(i * 2.3 + 0.5) * 1.15, 0.54, Math.sin(i * 2.3 + 0.5) * 1.15));
+  for (const s of [-1, 1]) g.add(mesh(rbox(0.6, 0.3, 0.3, 0.06), mat('#9a9da3'), s * 2.2, 0.15, 0.9));   // benches beside it
   return g;
 }
 function grave(R) {
@@ -1628,6 +2138,17 @@ function grave(R) {
       put(g, mesh(cyl(0.35, 0.35, 0.16, 10), stone, x, 0.9, z)).rotation.x = Math.PI / 2;
     }
   }
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  const stoneD = mat('#6d7076');
+  g.children.slice().forEach((c, i) => {
+    if (i >= 8) return;
+    if (c.geometry && c.geometry.type === 'BoxGeometry' && c.geometry.parameters.height > 0.8) {
+      g.add(mesh(box(0.3, 0.03, 0.02), stoneD, c.position.x, 0.55, c.position.z + 0.09));
+      g.add(mesh(ball(0.06, 0), mat(BRIGHT[i % 7]), c.position.x + 0.2, 0.06, c.position.z + 0.3));
+    }
+  });
+  for (let i = 0; i < 4; i++) g.add(mesh(box(0.5, 0.04, 0.9), mat('#5a7a3a'), (i - 1.5) * 1.5, 0.02, 0.5));
   return g;
 }
 function snowman() {
@@ -1641,6 +2162,13 @@ function snowman() {
   for (const s of [-1, 1]) g.add(mesh(ball(0.04, 1), mat('#15151a'), s * 0.11, 2.1, 0.27));
   g.add(mesh(cyl(0.2, 0.2, 0.3, 10), mat('#1d1d22'), 0, 2.42, 0));
   g.add(mesh(cyl(0.32, 0.32, 0.04, 10), mat('#1d1d22'), 0, 2.28, 0));
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  for (let i = 0; i < 3; i++) g.add(mesh(ball(0.045), mat('#15151a'), 0, 1.25 + i * 0.16, 0.41 - i * 0.02));
+  put(g, mesh(new THREE.TorusGeometry(0.3, 0.07, 8, 20), mat('#e63946'), 0, 1.78, 0)).rotation.x = Math.PI / 2;
+  g.add(mesh(box(0.12, 0.4, 0.04), mat('#e63946'), 0.15, 1.6, 0.28));
+  for (const s of [-1, 1]) g.add(mesh(tube([[s * 0.4, 1.5, 0], [s * 0.7, 1.75, 0], [s * 0.85, 1.95, 0.05]], 0.02, 8, 4), mat('#5d3b22')));
+  g.add(mesh(new THREE.TorusGeometry(0.08, 0.015, 4, 10, Math.PI), mat('#15151a'), 0, 1.95, 0.27).rotateZ(Math.PI));
   return g;
 }
 function table(R, night, anims, held, spec) {
@@ -1661,6 +2189,16 @@ function table(R, night, anims, held, spec) {
   });
   g.add(decor);
   g.userData = { top, decor };
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  const linen = mat('#fbfbf7');
+  for (const s of [-1, 1]) g.add(mesh(box(2.0, 0.25, 0.02), linen, 0, 0.75, s * 0.56));
+  for (let i = 0; i < 4; i++) {
+    const x = -0.75 + i * 0.5;
+    g.add(mesh(box(0.12, 0.01, 0.12), mat(BRIGHT[i % 7]), x, 0.875, 0.32).rotateY(0.4));
+    g.add(mesh(box(0.015, 0.005, 0.18), mat('#d9dee6', { metalness: 0.8, roughness: 0.25 }), x - 0.14, 0.875, 0.2), mesh(box(0.015, 0.005, 0.2), mat('#d9dee6', { metalness: 0.8, roughness: 0.25 }), x + 0.14, 0.875, 0.2));
+    g.add(mesh(cyl(0.035, 0.03, 0.12, 10), mat('#dff1fb', { transparent: true, opacity: 0.5 }), x + 0.18, 0.93, -0.25));
+  }
   return g;
 }
 function flag(R, night, anims) {
@@ -1677,6 +2215,16 @@ function flag(R, night, anims) {
     g.add(f);
   }
   anims.push((t) => pennants.forEach((f, i) => { f.rotation.z = Math.sin(t * 3 + i) * 0.25; }));
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  for (const s of [-1, 1]) g.add(mesh(ball(0.09), _au, s * 3, 3.65, 0));
+  for (let i = 0; i < 9; i++) {
+    const u = (i + 0.5) / 9, x = -3 + u * 6, y = 2.6 - Math.sin(u * Math.PI) * 0.5;
+    const f = mesh(cone(0.16, 0.36, 3), mat(BRIGHT[(i + 3) % 7]), x, y - 0.18, 0.05);
+    f.rotation.x = Math.PI;
+    f.scale.z = 0.15;
+    g.add(f);
+  }
   return g;
 }
 function barrel(R) {
@@ -1688,6 +2236,12 @@ function barrel(R) {
     g.add(b);
   }
   g.add(mesh(box(0.8, 0.8, 0.8), mat('#b08a5a'), 1.7, 0.4, -0.2));
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  g.children.slice(0, 3).forEach((b) => b.add(mesh(cyl(0.33, 0.33, 0.02, 10), mat('#a8744a'), 0, 0.455, 0)));
+  for (let i = 0; i < 4; i++) g.add(mesh(box(0.82, 0.03, 0.82), mat('#9a7448'), 1.7, 0.1 + i * 0.2, -0.2));
+  g.add(mesh(new THREE.TorusGeometry(0.15, 0.04, 6, 14), mat('#d9c38a'), 1.7, 0.84, -0.2).rotateX(Math.PI / 2));
+  for (let i = 0; i < 2; i++) g.add(mesh(ball(0.09), mat('#d62828'), -0.85 + i * 0.15, 0.95, 0.05));
   return g;
 }
 function mushroom(R) {
@@ -1699,6 +2253,12 @@ function mushroom(R) {
     cap.scale.y = 0.6;
     g.add(cap);
   }
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  g.children.filter((c) => c.geometry && c.geometry.type === 'SphereGeometry').forEach((cap) => {
+    const r = cap.geometry.parameters.radius;
+    for (const a of [0.5, 2.6]) g.add(mesh(ball(r * 0.18), mat('#fbfbf7'), cap.position.x + Math.cos(a) * r * 0.5, cap.position.y + r * 0.4, cap.position.z + Math.sin(a) * r * 0.5));
+  });
   return g;
 }
 function stall(R) {
@@ -1712,6 +2272,14 @@ function stall(R) {
   }
   const goods = ['#edae49', '#d1495b', '#5a9e3d', '#f28c38'];
   for (let i = 0; i < 8; i++) g.add(mesh(ball(0.13, 1), mat(goods[i % 4]), (i - 3.5) * 0.3, 1.0, (i % 2) * 0.25));
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  g.add(mesh(rbox(1.4, 0.35, 0.06, 0.04), mat('#f4f1e1'), 0, 2.75, 0.85), mesh(box(1.1, 0.08, 0.07), mat('#d1495b'), 0, 2.75, 0.86));
+  for (let i = 0; i < 4; i++) g.add(mesh(rbox(0.14, 0.1, 0.01, 0.01), mat('#ffffff'), -0.9 + i * 0.6, 0.98, 0.56));
+  for (let i = 0; i < 5; i++) g.add(mesh(cone(0.2, 0.18, 3), mat(i % 2 ? '#f4f1ea' : '#d1495b'), (i - 2) * 0.56, 2.08, 0.92).rotateX(Math.PI));
+  for (const s of [-1, 1]) g.add(mesh(box(0.45, 0.35, 0.45), mat('#b08a5a'), s * 1.6, 0.18, 0.6));
+  g.add(mesh(cyl(0.12, 0.12, 0.02, 12), mat('#d9dee6', { metalness: 0.8, roughness: 0.25 }), 1.0, 0.92, -0.2), mesh(box(0.04, 0.1, 0.04), _d, 1.0, 0.86, -0.2));
+  g.add(mesh(cyl(0.015, 0.015, 0.4, 4), _d, -1.25, 2.0, 0.4), mesh(ball(0.1), glow('#ffd98a', 1.4), -1.25, 1.75, 0.4));
   return g;
 }
 function pyramid() {
@@ -1722,6 +2290,12 @@ function pyramid() {
   const q = mesh(cone(7, 8, 4), mat('#cfa558'), 15, 4, -6);
   q.rotation.y = Math.PI / 4;
   g.add(q);
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  const cap = mesh(cone(1.3, 1.5, 4), _au, 0, 14.3, 0);
+  cap.rotation.y = Math.PI / 4;
+  g.add(cap, mesh(box(2.4, 3, 1), mat('#3a2a1c'), 0, 1.5, 9.2));
+  for (let i = 1; i < 4; i++) { const w = 2 * 9.2 * (1 - (i * 3.4) / 15) + 0.25; g.add(mesh(box(w, 0.15, w), mat('#c9a25a'), 0, i * 3.4, 0)); }   // courses of stone
   return g;
 }
 function igloo() {
@@ -1730,16 +2304,28 @@ function igloo() {
   g.add(dome);
   g.add(mesh(box(1.1, 1.0, 1.0), mat('#e6eef4'), 0, 0.5, 1.9));
   g.add(mesh(box(0.6, 0.7, 0.1), mat('#27303d'), 0, 0.35, 2.41));
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  for (let i = 1; i <= 3; i++) {
+    const y = i * 0.45, r = Math.sqrt(4 - y * y);
+    put(g, mesh(new THREE.TorusGeometry(r, 0.03, 4, 28), mat('#dbe6ee'), 0, y, 0)).rotation.x = Math.PI / 2;
+  }
+  for (let i = 0; i < 4; i++) put(g, mesh(new THREE.TorusGeometry(2.0, 0.03, 4, 20, Math.PI / 2), mat('#dbe6ee'), 0, 0, 0)).rotation.set(0, i * Math.PI / 2 + 0.4, Math.PI / 2);
   return g;
 }
 function bush(R) {
   const g = new THREE.Group();
   for (let i = 0; i < 4; i++) {
-    const b = mesh(ball(0.5 + R() * 0.3, 1), mat(mix('#3e8b3a', '#5fa346', R())), (i - 1.5) * 0.8, 0.4, (R() - 0.5) * 0.6);
+    const b = mesh(blob(0.5 + R() * 0.3), mat(mix('#3e8b3a', '#5fa346', R())), (i - 1.5) * 0.8, 0.4, (R() - 0.5) * 0.6);
     b.scale.y = 0.8;
     g.add(b);
     if (i % 2) g.add(mesh(ball(0.07, 0), mat('#d1495b'), (i - 1.5) * 0.8 + 0.2, 0.75, 0.3));
   }
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  for (let i = 0; i < 5; i++) g.add(mesh(ball(0.06, 0), mat(i % 2 ? '#7d3cff' : '#d1495b'), (i - 2) * 0.55, 0.55 + (i % 2) * 0.2, 0.42));
+  const lf = slab([[0, 0], [0.08, 0.1], [0, 0.22], [-0.08, 0.1]], 0.01);
+  for (let i = 0; i < 4; i++) put(g, mesh(lf, mat('#5fae4f', { side: THREE.DoubleSide }), (i - 1.5) * 0.8, 0.85, 0.2)).rotation.set(-0.6, i, 0);
   return g;
 }
 function signpost() {
@@ -1750,6 +2336,12 @@ function signpost() {
     b.rotation.z = r;
     g.add(b);
   });
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  g.add(mesh(cone(0.1, 0.15, 6), _w, 0, 2.47, 0));
+  put(g, mesh(cone(0.13, 0.25, 3), mat('#c9a063'), 1.13, 2.19, 0.06)).rotation.z = -Math.PI / 2 + 0.15;
+  put(g, mesh(cone(0.13, 0.25, 3), mat('#c9a063'), -1.13, 1.58, 0.06)).rotation.z = Math.PI / 2 - 0.2;
+  for (let i = 0; i < 2; i++) g.add(mesh(ico(0.12, 0), flat('#8a8d93'), (i ? 0.18 : -0.15), 0.06, 0.12));
   return g;
 }
 function pumpkin(R) {
@@ -1761,6 +2353,17 @@ function pumpkin(R) {
     g.add(p);
     g.add(mesh(cyl(0.04, 0.05, 0.16, 5), mat('#3f6b2a'), x, 0.64 * k, (i % 2) * 0.4));
   }
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  g.children.filter((c) => c.geometry && c.geometry.type === 'SphereGeometry').forEach((p) => {
+    const r = p.geometry.parameters.radius;
+    for (const a of [0.6, -0.6, Math.PI]) {
+      const rib = mesh(ball(r * 0.98), mat('#e07b10'), p.position.x + Math.sin(a) * r * 0.12, p.position.y, p.position.z + Math.cos(a) * r * 0.12);
+      rib.scale.set(0.55, 0.78, 0.55);
+      g.add(rib);
+    }
+  });
+  for (let i = 0; i < 2; i++) put(g, mesh(slab([[0, 0], [0.12, 0.06], [0.2, 0], [0.1, -0.05]], 0.01), mat('#3f6b2a', { side: THREE.DoubleSide }), -0.9 + i * 1.8, 0.05, 0.3)).rotation.x = -Math.PI / 2;
   return g;
 }
 // ---- food and drink ----------------------------------------------------------
@@ -1781,6 +2384,8 @@ function glassOf(color, h = 0.16, r = 0.045, straw = false) {
   const liquid = mesh(cyl(r * 0.88, r * 0.78, h * 0.8, 16), mat(color, { roughness: 0.3 }), 0, h * 0.42, 0);
   g.add(liquid, mesh(cyl(r, r * 0.85, h, 16, 1), mat('#dff1fb', { transparent: true, opacity: 0.35, roughness: 0.05, depthWrite: false }), 0, h / 2, 0));
   if (straw) put(g, mesh(cyl(0.006, 0.006, h * 1.2, 6), mat('#ff5d8f'), r * 0.3, h * 0.85, 0)).rotation.z = -0.25;
+  put(g, mesh(new THREE.TorusGeometry(r, 0.004, 4, 20), mat('#e8f4fa', { roughness: 0.05 }), 0, h, 0)).rotation.x = Math.PI / 2;
+  g.add(mesh(cyl(r * 1.4, r * 1.4, 0.006, 18), mat('#c98b4a'), 0, -0.004, 0));
   g.userData = { liquid, drink: true };
   return g;
 }
@@ -2124,8 +2729,88 @@ const FOOD_MAKERS = {
     return g;
   },
 };
+// Finishing touches for each food: toppings, seeds, garnish, crumbs.
+const dot = (g, c, r, x, y, z, k = 1) => { const m = mesh(ball(r, k ? 1 : 0), mat(c), x, y, z); g.add(m); return m; };
+const FOOD_DETAIL = {
+  banana(g) {
+    // points along the curved peel: centre (0, -0.05), radius 0.08, turned by 0.5
+    const at = (a) => [0.08 * Math.cos(a + 0.5), -0.05 + 0.08 * Math.sin(a + 0.5)];
+    const [sx, sy] = at(0.02), [tx, ty] = at(2.08), [ax, ay] = at(0.8), [bx, by] = at(1.4);
+    g.add(mesh(cyl(0.008, 0.01, 0.03, 6), mat('#6b5a2a'), sx, sy + 0.01, 0), mesh(ball(0.011), mat('#4a3a1a'), tx, ty, 0));
+    dot(g, '#a07a2a', 0.007, ax, ay, 0.015); dot(g, '#a07a2a', 0.006, bx, by, 0.016);
+  },
+  bread(g) { for (let i = 0; i < 3; i++) put(g, mesh(box(0.012, 0.004, 0.07), mat('#e9c27a'), (i - 1) * 0.05, 0.088, 0)).rotation.y = 0.5; },
+  croissant(g) { for (const s of [-1, 1]) g.add(mesh(cone(0.02, 0.05, 8), mat('#c98b4a'), s * 0.06, -0.06, 0.02).rotateZ(s * 2.2)); for (let i = 0; i < 2; i++) g.add(mesh(new THREE.TorusGeometry(0.06, 0.006, 4, 12, 2.0), mat('#b8783a'), 0, -0.03, 0.025 * (i ? 1 : -1)).rotateX(Math.PI / 2)); },
+  egg(g) { g.add(mesh(lathe([[0.001, 0], [0.025, 0.002], [0.012, 0.02], [0.03, 0.045]], 14), mat('#3d5a80'), 0, -0.012, 0), mesh(cyl(0.028, 0.028, 0.006, 14), mat('#3d5a80'), 0, -0.012, 0)); },
+  pretzel(g) { for (let i = 0; i < 6; i++) dot(g, '#ffffff', 0.004, Math.cos(i * 1.1) * 0.035, 0.05, Math.sin(i * 1.1) * 0.01 + 0.004, 0); },
+  chocolate(g) { for (let i = 0; i < 2; i++) g.add(mesh(box(0.062, 0.003, 0.014), mat('#3a1a0a'), 0, 0.045 + i * 0.03, 0)); for (let i = 0; i < 2; i++) g.add(mesh(box(0.003, 0.06, 0.014), mat('#3a1a0a'), (i ? 0.012 : -0.012), 0.06, 0)); },
+  fish(g) { dot(g, '#101014', 0.006, 0.02, 0.045, 0.06); for (let i = 0; i < 3; i++) g.add(mesh(box(0.05, 0.004, 0.006), mat('#3a2a1a'), 0, 0.058, -0.03 + i * 0.03).rotateY(0.6)); },
+  nut(g) { g.add(mesh(cyl(0.004, 0.004, 0.02, 4), mat('#3b2a1a'), 0, 0.075, 0)); for (const y of [0.048, 0.056]) g.add(mesh(new THREE.TorusGeometry(0.024, 0.002, 4, 12), mat('#4a2e12'), 0, y, 0).rotateX(Math.PI / 2)); },
+  orange(g) { put(g, mesh(ball(0.014), mat('#4c9a4a'), 0.012, 0.095, 0)).scale.set(1.4, 0.3, 0.7); dot(g, '#d9771a', 0.006, 0, 0.005, 0.0); },
+  pie(g) { for (let i = 0; i < 3; i++) g.add(mesh(box(0.012, 0.006, 0.12), mat('#e0b066'), (i - 1) * 0.035, 0.055, -0.06).rotateY(0.2)); },
+  steak(g) { for (let i = 0; i < 3; i++) g.add(mesh(box(0.11, 0.004, 0.008), mat('#3b1d12'), 0, 0.042, -0.03 + i * 0.03).rotateY(0.5)); put(g, mesh(slab([[0, 0], [0.02, 0.03], [0, 0.06], [-0.02, 0.03]], 0.003), mat('#4c9a4a')), 0.06, 0.045, 0.03).rotation.x = -Math.PI / 2; },
+  strawberry(g) { for (let i = 0; i < 6; i++) dot(g, '#f6d27a', 0.0035, Math.cos(i * 1.05) * 0.028, 0.02 + (i % 3) * 0.012, Math.sin(i * 1.05) * 0.028, 0); },
+  apple(g) { put(g, mesh(ball(0.012), mat('#4c9a4a'), -0.012, 0.1, 0)).scale.set(1.4, 0.3, 0.8); dot(g, '#7a1a1a', 0.008, 0, 0.004, 0); dot(g, '#ff8a8a', 0.012, 0.025, 0.06, 0.03); },
+  candy(g) { for (const s of [-1, 1]) g.add(mesh(cone(0.012, 0.025, 6), mat('#ff5d8f', { transparent: true, opacity: 0.7 }), s * 0.05, 0.045, 0).rotateZ(s * Math.PI / 2)); g.add(mesh(new THREE.TorusGeometry(0.035, 0.004, 4, 16), mat('#ffd166'), 0, 0.045, 0.007)); },
+  coffee(g) { g.add(mesh(cyl(0.07, 0.06, 0.008, 18), mat('#f4f4f4', { roughness: 0.3 }), 0, 0.0, 0)); for (let i = 0; i < 2; i++) g.add(mesh(ball(0.015 + i * 0.006), mat('#ffffff', { transparent: true, opacity: 0.4 }), 0.01 * i, 0.12 + i * 0.04, 0)); dot(g, '#c98b4a', 0.012, 0.03, 0.088, 0.01); },
+  tea(g) { FOOD_DETAIL.coffee(g); g.add(mesh(cyl(0.002, 0.002, 0.06, 4), mat('#e9e9e9'), 0.03, 0.1, 0), mesh(box(0.02, 0.025, 0.002), mat('#e63946'), 0.05, 0.07, 0)); },
+  corn(g) { for (let i = 0; i < 4; i++) { const a = (i / 4) * Math.PI * 2; g.add(mesh(box(0.004, 0.13, 0.004), mat('#e0b42a'), Math.cos(a) * 0.028, 0, Math.sin(a) * 0.028)); } },
+  cupcake(g) { for (let i = 0; i < 4; i++) g.add(mesh(box(0.012, 0.004, 0.004), mat(BRIGHT[i]), Math.cos(i * 1.6) * 0.03, 0.09 + (i % 2) * 0.012, Math.sin(i * 1.6) * 0.03).rotateY(i)); },
+  honey(g) { g.add(mesh(cyl(0.061, 0.061, 0.04, 16, 1, true), mat('#fbf4e6', { side: THREE.DoubleSide }), 0, 0.05, 0)); for (let i = 0; i < 2; i++) g.add(mesh(capsule(0.006, 0.02), mat('#e8a317', { roughness: 0.15 }), (i ? 0.03 : -0.02), 0.085, 0.058)); },
+  hotdog(g) { g.add(mesh(box(0.15, 0.005, 0.01), mat('#d62828'), 0, 0.077, 0.012)); for (let i = 0; i < 3; i++) dot(g, '#5db04a', 0.006, -0.04 + i * 0.04, 0.078, -0.008, 0); },
+  soda(g) { g.add(mesh(rbox(0.02, 0.003, 0.012, 0.002), mat('#c3c8cf', { metalness: 0.8 }), 0.01, 0.131, 0), mesh(cyl(0.004, 0.004, 0.08, 6), mat('#ffffff'), -0.01, 0.16, 0), mesh(cyl(0.0355, 0.0355, 0.008, 18), mat('#ffffff'), 0, 0.09, 0)); },
+  sushi(g) { const two = FOOD_MAKERS.sushi(); two.position.set(0.075, 0, 0.02); g.add(two); g.add(mesh(ball(0.012), mat('#7cb342'), -0.06, 0.01, 0.05)); },
+  juice(g) { put(g, mesh(cyl(0.035, 0.035, 0.006, 12, 1, false, 0, Math.PI), mat('#f6a02c'), 0.045, 0.15, 0)).rotation.x = Math.PI / 2; },
+  lemonade(g) { for (let i = 0; i < 2; i++) g.add(mesh(rbox(0.025, 0.025, 0.025, 0.005), mat('#e8f6fb', { transparent: true, opacity: 0.7 }), (i ? 0.012 : -0.01), 0.13, (i ? -0.01 : 0.01))); },
+  milkshake(g) { for (let i = 0; i < 2; i++) g.add(mesh(new THREE.TorusGeometry(0.03 - i * 0.01, 0.012, 6, 14), mat('#ffffff'), 0, 0.22 + i * 0.015, 0).rotateX(Math.PI / 2)); for (let i = 0; i < 2; i++) g.add(mesh(box(0.008, 0.003, 0.003), mat(BRIGHT[i]), (i - 0.5) * 0.02, 0.245, 0.01)); },
+  milk(g) { g.add(mesh(cyl(0.039, 0.039, 0.006, 16), mat('#ffffff'), 0, 0.135, 0)); },
+  carrot(g) { for (let i = 0; i < 4; i++) g.add(mesh(new THREE.TorusGeometry(0.02 - i * 0.004, 0.002, 4, 10), mat('#d9771a'), 0, 0.02 - i * 0.03, 0).rotateX(Math.PI / 2)); },
+  cheese(g) { for (let i = 0; i < 4; i++) dot(g, '#d9a32e', 0.008, (i - 1.5) * 0.02, 0.015 + (i % 2) * 0.012, -0.03 + i * 0.012); },
+  drumstick(g) { for (let i = 0; i < 3; i++) dot(g, '#b86f35', 0.014, Math.cos(i * 2) * 0.035, 0.06 + (i - 1) * 0.02, Math.sin(i * 2) * 0.035); put(g, mesh(slab([[0, 0], [0.012, 0.02], [0, 0.04], [-0.012, 0.02]], 0.003), mat('#4c9a4a')), 0, 0.12, 0.02).rotation.x = -0.4; },
+  icecream(g) { [[0.032, 0.015], [0.022, -0.02], [0.012, -0.05]].forEach(([r, y]) => g.add(mesh(new THREE.TorusGeometry(r, 0.003, 4, 16), mat('#b98340'), 0, y, 0).rotateX(Math.PI / 2))); g.add(mesh(capsule(0.008, 0.02), mat('#f7b7c9'), 0.04, 0.045, 0.02)); },
+  potion(g) { g.add(mesh(rbox(0.05, 0.03, 0.005, 0.005), mat('#f4efe2'), 0, 0.05, 0.053)); for (let i = 0; i < 3; i++) dot(g, '#e6d8ff', 0.008 - i * 0.002, (i - 1) * 0.015, 0.06 + i * 0.015, 0.02); },
+  bone(g) { for (let i = 0; i < 5; i++) dot(g, '#e2d8c2', 0.004, -0.05 + i * 0.025, 0.035, 0.012, 0); },
+  cake(g) { for (let i = 0; i < 3; i++) dot(g, '#ffffff', 0.012, -0.04 + i * 0.04, 0.108, -0.06); for (let i = 0; i < 2; i++) g.add(mesh(box(0.012, 0.004, 0.004), mat('#4a2412'), -0.02 + i * 0.04, 0.106, -0.03).rotateY(i)); },
+  pizza(g) {
+    // the slice's tip is at z = 0.1 and it widens toward the crust at z = -0.1
+    [[0.0, -0.06], [0.025, 0.0], [-0.035, -0.04]].forEach(([x, z]) => g.add(mesh(cyl(0.017, 0.017, 0.006, 12), mat('#b3261e'), x, 0.012, z)));
+    [[0.0, -0.01], [-0.02, -0.07]].forEach(([x, z]) => g.add(mesh(new THREE.TorusGeometry(0.008, 0.003, 4, 8), mat('#1b1b1f'), x, 0.014, z).rotateX(Math.PI / 2)));
+    put(g, mesh(slab([[0, 0], [0.01, 0.012], [0, 0.024], [-0.01, 0.012]], 0.002), mat('#2f8a3a'), 0.005, 0.015, 0.05)).rotation.x = -Math.PI / 2;
+  },
+  sandwich(g) { g.add(mesh(cyl(0.003, 0.003, 0.12, 4), mat('#e9d6a8'), 0, 0.09, 0), mesh(ball(0.01), mat('#3a6b2a'), 0, 0.15, 0)); for (let i = 0; i < 3; i++) { const a = (i / 3) * Math.PI * 2 + 0.5; g.add(mesh(box(0.1, 0.03, 0.008), mat('#c98a3c'), Math.cos(a) * 0.05, 0.04, Math.sin(a) * 0.05).rotateY(-a + Math.PI / 2)); } },
+  taco(g) { for (let i = 0; i < 3; i++) g.add(mesh(box(0.04, 0.004, 0.004), mat('#f6c02e'), (i - 1) * 0.03, 0.12, 0.01).rotateY(i)); g.add(mesh(ball(0.015), mat('#fbfbf7'), 0.02, 0.12, -0.01)); for (let i = 0; i < 2; i++) dot(g, '#7cb342', 0.012, (i ? 0.05 : -0.05), 0.11, 0.01); },
+  pancakes(g) { for (let i = 0; i < 4; i++) dot(g, i % 2 ? '#3d5a80' : '#c1121f', 0.012, Math.cos(i * 1.6) * 0.05, 0.1, Math.sin(i * 1.6) * 0.05); for (let i = 0; i < 2; i++) g.add(mesh(capsule(0.006, 0.02), mat('#8a4a12', { roughness: 0.2 }), (i ? 0.07 : -0.065), 0.06, 0.02)); },
+  bamboo(g) { for (let i = 0; i < 4; i++) put(g, mesh(box(0.025, 0.002, 0.1), mat('#4c9a4a'), 0.02 * (i % 2 ? 1 : -1), 0.12 + i * 0.03, 0)).rotation.set(0.3, i, (i % 2 ? -0.6 : 0.6)); for (let i = 0; i < 3; i++) g.add(mesh(new THREE.TorusGeometry(0.02, 0.003, 4, 10), mat('#6a9a3a'), 0, i * 0.105 - 0.1, 0).rotateX(Math.PI / 2)); },
+  cookie(g) { for (let i = 0; i < 5; i++) dot(g, '#3b2412', 0.008, Math.cos(i * 1.3 + 0.4) * 0.025, Math.sin(i * 1.3 + 0.4) * 0.025, 0.009); for (let i = 0; i < 2; i++) dot(g, '#c98b4a', 0.006, 0.07 + i * 0.01, -0.02, 0, 0); },
+  watermelon(g) { for (let i = 0; i < 5; i++) dot(g, '#1b1b1f', 0.005, (i - 2) * 0.03, 0.08 + (i % 2) * 0.015, 0.016); g.add(mesh(new THREE.TorusGeometry(0.115, 0.004, 4, 16, Math.PI), mat('#a7d36a')), mesh(new THREE.TorusGeometry(0.1, 0.003, 4, 16, Math.PI), mat('#f9a3a8'))); },
+  noodles(g) {
+    for (const s of [-1, 1]) put(g, mesh(cyl(0.004, 0.003, 0.24, 6), mat('#8b5a36'), 0.03 + s * 0.012, 0.15, 0.03)).rotation.z = 0.5;
+    const part = g.userData.part;
+    part.add(mesh(ball(0.022), mat('#fbfbf7'), 0.03, 0.012, -0.02), mesh(ball(0.012), mat('#f6c02e'), 0.03, 0.02, -0.012));
+    for (let i = 0; i < 4; i++) part.add(mesh(cyl(0.006, 0.006, 0.004, 8), mat('#5db04a'), -0.03 + i * 0.015, 0.012, 0.03));
+  },
+  soup(g) { const part = g.userData.part; for (let i = 0; i < 3; i++) part.add(mesh(slab([[0, 0], [0.008, 0.01], [0, 0.02], [-0.008, 0.01]], 0.002), mat('#4c9a4a'), (i - 1) * 0.025, 0.012, 0.01).rotateX(-Math.PI / 2)); for (let i = 0; i < 2; i++) part.add(mesh(rbox(0.015, 0.015, 0.015, 0.003), mat('#e0b066'), (i ? 0.02 : -0.03), 0.014, -0.02)); },
+  grass(g) { for (let i = 0; i < 6; i++) { const b = mesh(cone(0.025, 0.2 + (i % 3) * 0.04, 5), mat(i % 2 ? '#6aae45' : '#4c9a3a'), Math.cos(i * 1.1 + 0.3) * 0.04, 0.1, Math.sin(i * 1.1 + 0.3) * 0.04); b.rotation.set(Math.sin(i) * 0.2, 0, Math.cos(i) * 0.2); g.add(b); } g.add(mesh(cyl(0.004, 0.004, 0.2, 4), mat('#3f8f3f'), 0.05, 0.1, 0.03)); put(g, mesh(ball(0.025, 0), mat('#ffffff'), 0.05, 0.2, 0.03)).scale.y = 0.4; dot(g, '#f6c02e', 0.01, 0.05, 0.205, 0.03); },
+  fries(g) { dot(g, '#d62828', 0.01, 0.09, 0.04, 0.02); for (let i = 0; i < 6; i++) { const f = mesh(box(0.013, 0.11, 0.013), mat('#f6c94a'), ((i % 3) - 1) * 0.022 + 0.01, 0.13, (i < 3 ? 0.012 : -0.012)); f.rotation.z = (i - 2.5) * 0.08; g.add(f); } g.add(mesh(rbox(0.03, 0.03, 0.002, 0.005), mat('#f2c230'), 0, 0.06, 0.026)); g.add(mesh(cyl(0.025, 0.02, 0.03, 12), mat('#fbfbfb'), 0.09, 0.015, 0.02), mesh(cyl(0.023, 0.023, 0.004, 12), mat('#d62828'), 0.09, 0.03, 0.02)); },
+  grapes(g) { put(g, mesh(slab([[0, 0], [0.03, 0.02], [0.02, 0.05], [0, 0.04], [-0.02, 0.05], [-0.03, 0.02]], 0.003), mat('#4c9a4a'), 0.02, 0.06, 0)).rotation.x = -0.3; [[-0.5, 0.5], [0.5, 0.5], [-1, -0.5], [1, -0.5], [-0.5, -1.5], [0.5, -1.5], [0, -0.5], [-1.5, 0], [1.5, 0]].forEach(([x, y]) => dot(g, '#7b3aa5', 0.019, x * 0.026, y * 0.03, -0.018)); },
+  salad(g) { const part = g.userData.part; for (let i = 0; i < 4; i++) part.add(mesh(cyl(0.015, 0.015, 0.004, 10), mat('#e2412f'), Math.cos(i * 1.6) * 0.03, 0.025, Math.sin(i * 1.6) * 0.03)); for (let i = 0; i < 3; i++) part.add(mesh(rbox(0.012, 0.012, 0.012, 0.003), mat('#e0b066'), (i - 1) * 0.025, 0.03, 0.04)); for (let i = 0; i < 3; i++) part.add(mesh(cyl(0.012, 0.012, 0.004, 10), mat('#b5d98a'), (i - 1) * 0.03, 0.028, -0.04)); },
+  cereal(g) { const part = g.userData.part; for (let i = 0; i < 8; i++) part.add(mesh(new THREE.TorusGeometry(0.009, 0.004, 4, 8), mat(BRIGHT[(i + 3) % 7]), Math.cos(i * 0.9 + 0.3) * 0.035, 0.014, Math.sin(i * 0.9 + 0.3) * 0.035)); g.add(buildSpoon()); g.children[g.children.length - 1].position.set(0.05, 0.1, 0); for (let i = 0; i < 2; i++) dot(g, '#ffffff', 0.006, (i ? 0.06 : -0.06), 0.09, 0.02); },
+  donut(g) { for (let i = 0; i < 12; i++) g.add(mesh(box(0.012, 0.004, 0.004), mat(BRIGHT[(i + 2) % 7]), Math.cos(i * 0.52 + 0.26) * 0.065, Math.sin(i * 0.52 + 0.26) * 0.065, 0.032).rotateZ(i)); },
+  hamburger(g) {
+    for (let i = 0; i < 2; i++) g.add(mesh(cyl(0.025, 0.025, 0.006, 12), mat('#6a9a3a'), (i ? 0.04 : -0.035), 0.094, (i ? 0.02 : -0.03)));
+    g.add(mesh(new THREE.TorusGeometry(0.06, 0.008, 6, 16), mat('#fbf4e6'), 0, 0.092, 0).rotateX(Math.PI / 2));
+    for (let i = 0; i < 5; i++) dot(g, '#fff7e0', 0.006, Math.cos(i * 1.3 + 0.7) * 0.07, 0.125, Math.sin(i * 1.3 + 0.7) * 0.07);
+    for (let i = 0; i < 2; i++) g.add(mesh(capsule(0.006, 0.015), mat('#d62828'), (i ? 0.05 : -0.06), 0.05, 0.085));
+    g.add(mesh(cyl(0.003, 0.003, 0.12, 4), mat('#e9d6a8'), 0, 0.16, 0), mesh(ball(0.01), mat('#3a6b2a'), 0, 0.22, 0));
+    g.add(mesh(new THREE.TorusGeometry(0.11, 0.008, 4, 20), mat('#7cc356'), 0, 0.078, 0).rotateX(Math.PI / 2));
+  },
+  seeds(g) { for (let i = 0; i < 14; i++) dot(g, i % 2 ? '#c9a24a' : '#6b4a2b', 0.01, Math.cos(i * 2.4 + 1) * 0.06 * Math.sqrt((i + 0.5) / 14), 0.008, Math.sin(i * 2.4 + 1) * 0.06 * Math.sqrt((i + 0.5) / 14), 0); },
+  popcorn(g) { for (let i = 0; i < 12; i++) dot(g, '#fff8dc', 0.016, Math.cos(i * 0.9) * 0.035, 0.14 + (i % 3) * 0.012, Math.sin(i * 0.9) * 0.035, 0); for (let i = 0; i < 5; i++) dot(g, '#f6c02e', 0.008, Math.cos(i * 1.3) * 0.02, 0.16, Math.sin(i * 1.3) * 0.02); },
+  water(g) { g.add(mesh(cyl(0.039, 0.039, 0.004, 16), mat('#e8f6fb', { transparent: true, opacity: 0.6 }), 0, 0.125, 0)); },
+};
 function buildFood(kind) {
   const g = (FOOD_MAKERS[kind] || FOOD_MAKERS.sandwich)();
+  if (FOOD_DETAIL[kind]) FOOD_DETAIL[kind](g);
   g.userData.kind = kind;
   if (!g.userData.part && !g.userData.drink) {             // shrink the whole thing as it is eaten
     const inner = new THREE.Group();
@@ -2216,6 +2901,11 @@ function beachball(R, night, anims) {
   });
   g.add(b);
   anims.push((t) => { b.position.y = 0.45 + Math.abs(Math.sin(t * 2.6)) * 1.1; b.rotation.x = t * 2; });
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  const bb = g.children[0];
+  ['#2a9d8f', '#f28c38', '#8d5fd3'].forEach((c, i) => bb.add(mesh(new THREE.SphereGeometry(0.456, 16, 12, i * 2.1 + 1.05, 0.5), mat(c))));
+  bb.add(mesh(cyl(0.03, 0.03, 0.04, 8), mat('#ffffff'), 0, 0.45, 0));
   return g;
 }
 function kite(R, night, anims) {
@@ -2234,6 +2924,11 @@ function kite(R, night, anims) {
     string.rotation.z = -Math.atan2(x, y);
     string.scale.y = Math.hypot(x, y) / 6.2;
   });
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  const kk = g.children[0], tl = g.children[2];
+  kk.add(mesh(box(0.02, 1.3, 20), _w), mesh(box(1.0, 0.02, 20), _w));
+  for (let i = 0; i < 3; i++) put(tl, mesh(box(0.22, 0.08, 0.02), mat(BRIGHT[i]), 0, 0.3 - i * 0.35, 0)).rotation.z = 0.4;
   return g;
 }
 function umbrella(R, night, anims, held) {
@@ -2248,6 +2943,12 @@ function umbrella(R, night, anims, held) {
     g.add(mesh(box(0.9, 0.03, 1.9), mat(BRIGHT[Math.floor(R() * 7)]), 1.4, 0.03, 0.3));
     g.rotation.z = 0.08;
   }
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  const pole = g.children[0];
+  g.add(mesh(cone(0.04, 0.15, 8), mat('#e9e9e9'), 0, 2.68, 0));
+  for (let i = 0; i < 8; i++) { const a = (i * Math.PI) / 4; put(g, mesh(cyl(0.008, 0.008, 1.55, 4), mat('#e9e9e9'), Math.sin(a) * 0.75, 2.3, Math.cos(a) * 0.75)).rotation.set(Math.cos(a) * 1.22, 0, -Math.sin(a) * 1.22); }
+  g.add(mesh(new THREE.TorusGeometry(1.5, 0.015, 4, 32), mat('#ffffff'), 0, 2.08, 0).rotateX(Math.PI / 2));
   return g;
 }
 function books(R) {
@@ -2258,6 +2959,17 @@ function books(R) {
     b.add(mesh(box(0.5, 0.08, 0.41), mat('#f4efe2'), 0.03, 0, 0));
     g.add(b);
   }
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  ['#e63946', '#2a9d8f'].forEach((c, i) => g.add(mesh(box(0.02, 0.005, 0.2), mat(c), 0.12 + i * 0.05, 0.03 + 4 * 0.115, 0.14)));
+  const open = new THREE.Group();
+  for (const s of [-1, 1]) put(open, mesh(box(0.28, 0.02, 0.38), mat('#f4efe2'), s * 0.14, 0.02, 0)).rotation.z = s * 0.12;
+  open.add(mesh(box(0.6, 0.01, 0.42), mat('#3d5a80'), 0, 0, 0));
+  open.position.set(0.8, 0, 0.2);
+  g.add(open);
+  for (const s of [-1, 1]) g.add(mesh(new THREE.TorusGeometry(0.05, 0.008, 4, 12), _d, 0.75 + s * 0.06, 0.04, -0.3).rotateX(Math.PI / 2));
+  g.add(mesh(box(0.06, 0.006, 0.006), _d, 0.75, 0.04, -0.3));
+  g.add(mesh(box(0.03, 0.12, 0.03), mat('#f2c230'), 0.35, 0.06, -0.1), mesh(cone(0.02, 0.04, 6), mat('#e8a3a3'), 0.35, 0.14, -0.1));   // a pencil
   return g;
 }
 function bed(R) {
@@ -2269,6 +2981,12 @@ function bed(R) {
   const pillow = mesh(ball(0.3), mat('#ffffff'), 0, 0.74, -0.8);
   pillow.scale.set(1.5, 0.4, 0.8);
   g.add(pillow);
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) g.add(mesh(box(0.1, 0.2, 0.1), mat('#5d3b22'), sx * 0.7, 0.1, sz * 1.1));
+  const p2 = mesh(ball(0.28), mat('#fbfbfb'), 0.35, 0.74, -0.8);
+  p2.scale.set(1.3, 0.38, 0.75);
+  g.add(p2, mesh(rbox(1.44, 0.06, 0.2, 0.03), mat('#f4f4f4'), 0, 0.74, -0.25));
   return g;
 }
 function sofa(R) {
@@ -2277,6 +2995,11 @@ function sofa(R) {
   g.add(mesh(box(2.2, 0.7, 0.25), c, 0, 0.85, -0.35));
   for (const s of [-1, 1]) g.add(mesh(box(0.25, 0.55, 0.9), c, s * 1.1, 0.6, 0));
   for (const s of [-1, 1]) g.add(mesh(box(0.9, 0.14, 0.7), mat('#f4efe2'), s * 0.5, 0.66, 0.05));
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  const fabric = mat(mix('#8d5fd3', '#ffffff', 0.15), { roughness: 0.95 });
+  for (const s of [-1, 1]) g.add(mesh(rbox(0.95, 0.5, 0.18, 0.08), fabric, s * 0.5, 0.95, -0.22));
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) g.add(mesh(cyl(0.04, 0.03, 0.2, 8), _w, sx * 1.0, 0.1, sz * 0.35));
   return g;
 }
 function tv() {
@@ -2285,6 +3008,11 @@ function tv() {
   g.add(mesh(box(1.5, 0.9, 0.07), dark, 0, 1.05, 0));
   g.add(mesh(box(1.4, 0.8, 0.02), glow('#6ec5ff', 1.3), 0, 1.05, 0.04));
   g.add(mesh(box(0.4, 0.12, 0.2), dark, 0, 0.56, 0));
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  for (const s of [-1, 1]) put(g, mesh(cyl(0.01, 0.01, 0.6, 4), _d, s * 0.15, 1.75, -0.02)).rotation.z = s * 0.5;
+  for (let i = 0; i < 2; i++) g.add(mesh(cyl(0.02, 0.02, 0.02, 8), _d, 0.55 + i * 0.08, 0.62, 0.04).rotateX(Math.PI / 2));
+  for (const s of [-1, 1]) g.add(mesh(box(0.06, 0.2, 0.06), mat('#5d3b22'), s * 0.7, -0.08, 0.15));
   return g;
 }
 function clock(R, night, anims) {
@@ -2300,6 +3028,11 @@ function clock(R, night, anims) {
   const bob = pivot(g, 0, 1.4, 0.21);
   bob.add(mesh(cyl(0.01, 0.01, 0.6, 6), metal('#d9b23a'), 0, -0.3, 0), mesh(ball(0.08), metal('#d9b23a'), 0, -0.62, 0));
   anims.push((t) => { hand.rotation.z = -t * 1.2; short.rotation.z = -t * 0.1; bob.rotation.z = Math.sin(t * 3) * 0.25; });
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  for (let i = 0; i < 4; i++) { const a = (i * Math.PI) / 2; g.add(mesh(box(0.025, 0.025, 0.01), _d, Math.sin(a) * 0.19, 1.8 + Math.cos(a) * 0.19, 0.235)); }
+  g.add(mesh(cone(0.38, 0.2, 4), mat('#6b4226'), 0, 2.4, 0).rotateY(Math.PI / 4), mesh(rbox(0.5, 0.5, 0.02, 0.02), mat('#d9c38a', { transparent: true, opacity: 0.4 }), 0, 1.0, 0.21));
+  for (const s of [-1, 1]) g.add(mesh(ball(0.05), _w, s * 0.25, 0.0, 0.15));
   return g;
 }
 function door(R) {
@@ -2309,6 +3042,12 @@ function door(R) {
   leaf.add(mesh(box(1.0, 2.05, 0.07), mat(BRIGHT[Math.floor(R() * 7)]), 0.5, 1.03, 0));
   leaf.add(mesh(ball(0.05), metal('#d9b23a'), 0.88, 1.0, 0.06));
   leaf.rotation.y = -0.5;
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  const leafP = g.children[1];
+  for (const y of [0.55, 1.5]) leafP.add(mesh(rbox(0.75, 0.7, 0.03, 0.02), mat('#ffffff', { transparent: true, opacity: 0.25 }), 0.5, y, 0.05));
+  for (const y of [0.3, 1.8]) g.add(mesh(cyl(0.025, 0.025, 0.15, 6), _au, -0.5, y, 0.1));
+  g.add(mesh(box(1.4, 0.1, 0.4), _st, 0, 0.05, 0.2), mesh(box(0.25, 0.05, 0.02), _au, 0, 1.4, 0.12));
   return g;
 }
 function ladder() {
@@ -2316,6 +3055,13 @@ function ladder() {
   for (const s of [-1, 1]) g.add(mesh(box(0.07, 3.2, 0.07), wood, s * 0.3, 1.6, 0));
   for (let i = 0; i < 8; i++) g.add(mesh(box(0.6, 0.05, 0.05), wood, 0, 0.3 + i * 0.38, 0));
   g.rotation.x = -0.25;
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  const woodL = mat('#b08a5a');
+  for (let i = 0; i < 4; i++) g.add(mesh(cyl(0.02, 0.02, 0.62, 6), woodL, 0, 0.49 + i * 0.76, 0).rotateZ(Math.PI / 2));
+  for (const s of [-1, 1]) g.add(mesh(box(0.09, 0.05, 0.09), _d, s * 0.3, 0.02, 0));
+  g.add(mesh(cyl(0.12, 0.1, 0.22, 12), mat('#2a9d8f'), 0.0, 3.3, -0.2), mesh(cyl(0.12, 0.12, 0.02, 12), mat('#f2c230'), 0.0, 3.41, -0.2));
+  for (const s of [-1, 1]) put(g, mesh(box(0.04, 1.4, 0.04), woodL, s * 0.3, 0.9, -0.35)).rotation.x = 0.35;
   return g;
 }
 function mailbox() {
@@ -2325,6 +3071,11 @@ function mailbox() {
   b.rotation.x = Math.PI / 2;
   g.add(b, mesh(box(0.4, 0.2, 0.55), mat('#c62828', { roughness: 0.4 }), 0, 1.15, 0));
   g.add(mesh(box(0.03, 0.3, 0.12), mat('#f2c230'), 0.22, 1.4, 0.1));
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  g.add(mesh(cyl(0.22, 0.22, 0.02, 14), mat('#a51f1f'), 0, 1.25, 0.28).rotateX(Math.PI / 2));
+  g.add(mesh(box(0.25, 0.08, 0.25), _w, 0, 0.04, 0), mesh(rbox(0.12, 0.08, 0.01, 0.01), mat('#ffffff'), 0, 1.1, 0.29));
+  g.add(mesh(box(0.1, 0.1, 0.1), _w, 0, 0.7, 0));
   return g;
 }
 function trashcan() {
@@ -2332,6 +3083,10 @@ function trashcan() {
   g.add(mesh(cyl(0.36, 0.3, 0.95, 16), metal('#8a9099'), 0, 0.48, 0));
   g.add(mesh(cyl(0.39, 0.39, 0.08, 16), metal('#6d737c'), 0, 1.0, 0));
   g.add(mesh(box(0.2, 0.06, 0.06), metal('#6d737c'), 0, 1.07, 0));
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  for (const y of [0.25, 0.55, 0.85]) put(g, mesh(new THREE.TorusGeometry(0.34 - y * 0.05, 0.015, 4, 20), _fe, 0, y, 0)).rotation.x = Math.PI / 2;
+  for (const s of [-1, 1]) put(g, mesh(new THREE.TorusGeometry(0.06, 0.012, 4, 10, Math.PI), _fe, s * 0.37, 0.8, 0)).rotation.y = Math.PI / 2;
   return g;
 }
 function trafficlight(R, night, anims) {
@@ -2347,6 +3102,10 @@ function trafficlight(R, night, anims) {
     const on = [0, 2, 1][Math.floor(t / 1.6) % 3];
     lamps.forEach((l, i) => { if (l.material.emissiveIntensity !== undefined) l.material.emissiveIntensity = i === on ? 2.5 : 0.08; });
   });
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  for (let i = 0; i < 3; i++) g.add(mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.18, 12, 1, true, -Math.PI / 2, Math.PI), mat('#24272d', { side: THREE.DoubleSide }), 0, 3.82 - i * 0.35, 0.25).rotateX(Math.PI / 2));
+  g.add(mesh(rbox(0.6, 1.3, 0.05, 0.04), mat('#f2c230'), 0, 3.4, -0.2), mesh(cyl(0.18, 0.22, 0.12, 12), mat('#24272d'), 0, 0.06, 0));
   return g;
 }
 function stopsign() {
@@ -2355,6 +3114,11 @@ function stopsign() {
   const sign = mesh(cyl(0.42, 0.42, 0.05, 8), mat('#d62828', { roughness: 0.5 }), 0, 2.5, 0.04);
   sign.rotation.set(Math.PI / 2, Math.PI / 8, 0);
   g.add(sign, mesh(box(0.5, 0.12, 0.02), mat('#ffffff'), 0, 2.5, 0.08));
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  put(g, mesh(new THREE.TorusGeometry(0.4, 0.02, 4, 8), mat('#ffffff'), 0, 2.5, 0.07)).rotation.z = Math.PI / 8;
+  for (const y of [2.3, 2.7]) g.add(mesh(cyl(0.02, 0.02, 0.03, 6), _fe, 0, y, 0.08).rotateX(Math.PI / 2));
+  g.add(mesh(cyl(0.12, 0.14, 0.1, 10), _fe, 0, 0.05, 0));
   return g;
 }
 function hydrant() {
@@ -2364,6 +3128,12 @@ function hydrant() {
   const arm = mesh(cyl(0.08, 0.08, 0.6, 10), red, 0, 0.5, 0);
   arm.rotation.z = Math.PI / 2;
   g.add(arm);
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  for (const s of [-1, 1]) put(g, mesh(cyl(0.07, 0.07, 0.06, 10), _au, s * 0.32, 0.5, 0)).rotation.z = Math.PI / 2;
+  for (let i = 0; i < 3; i++) { const a = i * 2.1; g.add(mesh(cyl(0.02, 0.02, 0.05, 6), _au, Math.cos(a) * 0.12, 0.98, Math.sin(a) * 0.12)); }
+  g.add(mesh(lathe([[0.001, 0], [0.08, 0.02], [0.05, 0.1], [0.001, 0.12]], 10), mat('#d62828'), 0, 0.95, 0));
+  put(g, mesh(new THREE.TorusGeometry(0.08, 0.008, 4, 10, Math.PI), _fe, 0.2, 0.42, 0)).rotation.x = Math.PI / 2;
   return g;
 }
 function swing(R, night, anims) {
@@ -2383,6 +3153,13 @@ function swing(R, night, anims) {
     return p;
   });
   anims.push((t) => seats.forEach((p, i) => { p.rotation.x = Math.sin(t * 2.2 + i * 1.7) * 0.6; }));
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  const steelS = mat('#3d5a80', { metalness: 0.75, roughness: 0.3 });
+  for (const s of [-1, 1]) g.add(mesh(ball(0.08), steelS, s * 1.4, 2.7, 0), mesh(box(0.05, 0.05, 1.1), steelS, s * 1.32, 0.6, 0));
+  g.add(mesh(box(2.4, 0.05, 1.2), mat('#c2a272', { roughness: 1 }), 0, 0.02, 0));
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) g.add(mesh(cyl(0.09, 0.09, 0.05, 8), _d, sx * 1.3 + sx * 0.25, 0.03, sz * 1.0));
+  for (const x of [-0.6, 0.6]) for (const k of [-1, 1]) g.add(mesh(cyl(0.025, 0.025, 0.06, 6), steelS, x + k * 0.22, 2.7, 0));
   return g;
 }
 function slide() {
@@ -2397,6 +3174,16 @@ function slide() {
   }
   for (let i = 0; i < 6; i++) g.add(mesh(box(0.6, 0.04, 0.05), steel, 0, 0.3 + i * 0.32, -0.6));
   g.add(mesh(box(0.8, 0.06, 0.6), steel, 0, 2.05, -0.4));
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  const steelL = mat('#3d5a80', { metalness: 0.75, roughness: 0.3 });
+  for (const s of [-1, 1]) g.add(mesh(cyl(0.03, 0.03, 0.8, 6), steelL, s * 0.38, 2.45, -0.6), mesh(tube([[s * 0.3, 1.2, -0.62], [s * 0.36, 2.1, -0.62], [s * 0.36, 2.4, -0.3]], 0.02, 8, 4), steelL));
+  g.add(mesh(box(1.4, 0.04, 3.2), mat('#c2a272', { roughness: 1 }), 0, 0.02, 0.4));
+  g.add(mesh(cone(0.6, 0.5, 4), mat('#e63946'), 0, 3.15, -0.4).rotateY(Math.PI / 4));
+  for (const s of [-1, 1]) g.add(mesh(cyl(0.025, 0.025, 0.9, 6), steelL, s * 0.38, 2.5, -0.15));
+  for (const s of [-1, 1]) g.add(mesh(box(0.06, 0.06, 0.4), steelL, s * 0.36, 0.25, 1.95));
+  g.add(mesh(rbox(0.7, 0.06, 0.25, 0.03), mat('#f2c230'), 0, 0.15, 2.05));
+  g.add(mesh(ball(0.05), mat('#e63946'), 0, 3.42, -0.4));
   return g;
 }
 function sandcastle() {
@@ -2410,6 +3197,14 @@ function sandcastle() {
   g.add(mesh(cyl(0.012, 0.012, 0.5, 4), mat('#5d3b22'), 0, 2.0, 0), mesh(box(0.22, 0.14, 0.01), mat('#e63946'), 0.12, 2.15, 0));
   const pail = mesh(cyl(0.2, 0.15, 0.3, 12), mat('#2e86ab'), 1.4, 0.15, 0.5);
   g.add(pail);
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  const dk = mat('#c9a96a');
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) g.add(mesh(box(0.08, 0.14, 0.02), dk, sx * 0.8, 0.55, sz * 0.8 + sz * 0.3));
+  g.add(mesh(rbox(0.25, 0.3, 0.05, 0.05), dk, 0, 0.18, 0.81));
+  for (let i = 0; i < 4; i++) g.add(mesh(dome(0.07, 0.5), mat(['#fbe3d6', '#f7c9a9', '#ffffff', '#e8c3d6'][i]), -1.3 + i * 0.25, 0, 1.2));
+  put(g, mesh(new THREE.TorusGeometry(1.5, 0.12, 4, 24), mat('#6cb4d9', { roughness: 0.2 }), 0, 0.02, 0)).rotation.x = Math.PI / 2;
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) put(g, mesh(slab([[0, 0], [0.18, 0.06], [0, 0.12]], 0.01), mat(BRIGHT[(sx + sz + 4) % 7], { side: THREE.DoubleSide }), sx * 0.8, 1.4, sz * 0.8)).rotation.y = 0.5;
   return g;
 }
 function surfboard(R) {
@@ -2421,6 +3216,10 @@ function surfboard(R) {
     b.add(mesh(box(0.08, 2.2, 0.32), mat('#f7f3e8')));
     g.add(b);
   }
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  g.add(mesh(dome(0.6, 0.5), mat('#e2c58a'), 0, -0.05, 0));
+  for (const x of [-0.4, 0.4]) g.add(mesh(slab([[0, 0], [0.1, 0], [0, 0.14]], 0.01), _d, x, 0.2, -0.05), mesh(box(0.04, 1.6, 0.04), mat('#ffffff'), x, 1.1, 0.06));
   return g;
 }
 function cannon() {
@@ -2453,6 +3252,17 @@ function ferriswheel(R, night, anims) {
   }
   put(w, mesh(cyl(0.4, 0.4, 1.3, 14), mat('#e63946'), 0, 0, 0)).rotation.x = Math.PI / 2;
   anims.push((t) => { w.rotation.z = t * 0.25; cabins.forEach((c) => { c.rotation.z = -t * 0.25; }); });
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  const steelW = mat('#d9dee6', { metalness: 0.75, roughness: 0.3 }), wv = g.children.find((c) => c.isGroup && c.children.length > 10);
+  for (let i = 0; i < 10; i++) {
+    const a = (i * Math.PI) / 5 + Math.PI / 10;
+    const spoke = mesh(cyl(0.03, 0.03, 6, 6), steelW, Math.cos(a) * 3, Math.sin(a) * 3, 0.5);
+    spoke.rotation.z = a - Math.PI / 2;
+    wv.add(spoke, mesh(ball(0.12), glow(BRIGHT[i % 7], 1.6), Math.cos(a) * 6, Math.sin(a) * 6, 0.55));
+    wv.add(mesh(ball(0.1), glow('#fff3b0', 1.6), Math.cos(a) * 4, Math.sin(a) * 4, 0.55));
+  }
+  g.add(mesh(rbox(2.5, 0.3, 2.2, 0.08), mat('#9a9da3'), 0, 0.15, 0));
   return g;
 }
 function carousel(R, night, anims) {
@@ -2487,6 +3297,11 @@ function telescope() {
   const tube = mesh(cyl(0.12, 0.09, 1.4, 14), mat('#f4f4f4', { roughness: 0.3 }), 0, 1.6, 0.2);
   tube.rotation.x = Math.PI / 2 - 0.6;
   g.add(tube);
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  g.add(mesh(cyl(0.035, 0.035, 0.12, 8), _d, 0, 2.1, -0.15), mesh(ball(0.08), _d, 0, 1.6, 0.2));
+  put(g, mesh(new THREE.TorusGeometry(0.11, 0.015, 6, 14), _au, 0, 1.95, 0.75)).rotation.x = 0.97;
+  put(g, mesh(cyl(0.025, 0.025, 0.45, 8), mat('#f4f4f4'), 0.12, 1.72, 0.25)).rotation.x = Math.PI / 2 - 0.6;
   return g;
 }
 function cake() {
@@ -2501,6 +3316,12 @@ function cake() {
     g.add(mesh(cyl(0.015, 0.015, 0.16, 6), mat(BRIGHT[i]), Math.cos(a) * 0.13, 1.63, Math.sin(a) * 0.13));
     g.add(mesh(ball(0.03), glow('#ffcc66', 3), Math.cos(a) * 0.13, 1.74, Math.sin(a) * 0.13));
   }
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  g.add(mesh(cyl(0.75, 0.75, 0.03, 24), mat('#fbfbfb', { roughness: 0.3 }), 0, 0.77, 0));
+  for (let i = 0; i < 8; i++) { const a = (i / 8) * Math.PI * 2; g.add(mesh(ball(0.035), mat('#fff3e0'), Math.cos(a) * 0.45, 1.1, Math.sin(a) * 0.45)); }
+  for (let i = 0; i < 4; i++) { const a = (i / 4) * Math.PI * 2 + 0.4; g.add(mesh(ball(0.04), mat('#c1121f'), Math.cos(a) * 0.3, 1.36, Math.sin(a) * 0.3)); }
+  g.add(mesh(box(0.06, 0.01, 0.35), mat('#d9dee6', { metalness: 0.8, roughness: 0.25 }), 0.55, 0.8, 0.45), mesh(box(0.05, 0.02, 0.12), mat('#5d3b22'), 0.55, 0.8, 0.68));
   return g;
 }
 function gift(R) {
@@ -2511,6 +3332,14 @@ function gift(R) {
     g.add(mesh(box(k * 1.02, k * 1.02, k * 0.16), ribbon, x, k / 2, z), mesh(box(k * 0.16, k * 1.02, k * 1.02), ribbon, x, k / 2, z));
     g.add(mesh(ball(k * 0.12), ribbon, x, k + k * 0.08, z));
   });
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  g.children.filter((c) => c.geometry && c.geometry.type === 'BoxGeometry' && c.geometry.parameters.width === c.geometry.parameters.height).forEach((bx, i) => {
+    const k = bx.geometry.parameters.width;
+    g.add(mesh(rbox(k * 0.25, k * 0.15, 0.01, 0.01), mat('#fbfbf7'), bx.position.x + k * 0.25, bx.position.y, bx.position.z + k / 2 + 0.006));
+    for (const s of [-1, 1]) put(g, mesh(new THREE.TorusGeometry(k * 0.12, k * 0.03, 4, 10), mat(i % 2 ? '#f5c542' : '#ffffff'), bx.position.x + s * k * 0.12, bx.position.y + k / 2 + k * 0.08, bx.position.z)).rotation.y = Math.PI / 2;
+  });
+  for (let i = 0; i < 4; i++) g.add(mesh(box(0.04, 0.005, 0.04), mat(BRIGHT[i + 2]), -0.6 + i * 0.4, 0.01, 0.8).rotateY(i));
   return g;
 }
 function xmastree(R, night) {
@@ -2522,6 +3351,14 @@ function xmastree(R, night) {
     g.add(mesh(ball(0.08), glow(BRIGHT[i % 7], night ? 2.5 : 0.9), Math.cos(a) * r, y, Math.sin(a) * r));
   }
   g.add(mesh(new THREE.OctahedronGeometry(0.22), glow('#ffd43b', 2.5), 0, 4.0, 0));
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  for (let i = 0; i < 3; i++) g.add(mesh(new THREE.TorusGeometry(1.15 - i * 0.3, 0.025, 4, 28), mat(i % 2 ? '#f5c542' : '#e9e9e9', { metalness: 0.6, roughness: 0.3 }), 0, 1.2 + i * 0.8, 0).rotateX(Math.PI / 2 - 0.15));
+  ['#e63946', '#2a9d8f', '#f2c230', '#8d5fd3'].forEach((c, i) => g.add(mesh(rbox(0.35, 0.3, 0.35, 0.04), mat(c), Math.cos(i * 1.6) * 1.2, 0.15, Math.sin(i * 1.6) * 1.2)));
+  for (let i = 0; i < 22; i++) {
+    const y = 0.8 + (i / 22) * 2.6, r = (1.25 - (y - 0.5) * 0.33) * 1.0, a = i * 2.4 + 0.7;
+    g.add(mesh(ball(0.06), mat(BRIGHT[(i + 3) % 7], { metalness: 0.5, roughness: 0.2 }), Math.cos(a) * r, y, Math.sin(a) * r));
+  }
   return g;
 }
 function basket(R) {
@@ -2532,6 +3369,11 @@ function basket(R) {
   ['#d62828', '#f28c38', '#f2c230', '#5a9e3d', '#d62828', '#8d5fd3'].forEach((c, i) => {
     g.add(mesh(ball(0.13), mat(c, { roughness: 0.4 }), Math.cos(i) * 0.24, 0.5 + (i % 2) * 0.08, Math.sin(i) * 0.24));
   });
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  for (const y of [0.08, 0.2, 0.32]) put(g, mesh(new THREE.TorusGeometry(0.47 - y * 0.25, 0.015, 4, 20), mat('#a07740'), 0, y, 0)).rotation.x = Math.PI / 2;
+  g.add(mesh(rbox(0.5, 0.02, 0.5, 0.01), mat('#e63946'), 0, 0.46, 0).rotateY(0.6));
+  for (let i = 0; i < 4; i++) put(g, mesh(slab([[0, 0], [0.04, 0.05], [0, 0.1], [-0.04, 0.05]], 0.005), mat('#4c9a4a'), Math.cos(i) * 0.2, 0.58, Math.sin(i) * 0.2)).rotation.x = -0.8;
   return g;
 }
 function haystack(R) {
@@ -2545,6 +3387,13 @@ function haystack(R) {
   const fork = mesh(cyl(0.025, 0.025, 1.8, 6), mat('#5d3b22'), -0.9, 0.9, 0.2);
   fork.rotation.z = 0.3;
   g.add(fork);
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  for (let i = 0; i < 6; i++) {
+    const st = mesh(box(0.01, 0.01, 0.4), mat('#e6c25a'), (R() - 0.3) * 1.6, 0.03, (R() - 0.5) * 1.2);
+    st.rotation.y = R() * 3;
+    g.add(st);
+  }
   return g;
 }
 function beehive(R, night, anims) {
@@ -2555,6 +3404,12 @@ function beehive(R, night, anims) {
   const bees = [];
   for (let i = 0; i < 6; i++) { const b = mesh(ball(0.045), mat('#f4c20d')); bees.push(b); g.add(b); }
   anims.push((t) => bees.forEach((b, i) => b.position.set(Math.sin(t * (2 + i * 0.3) + i) * 0.9, 1.1 + Math.sin(t * 3 + i * 2) * 0.4, Math.cos(t * (1.7 + i * 0.4) + i) * 0.9)));
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) g.add(mesh(box(0.06, 0.25, 0.06), mat('#5d3b22'), sx * 0.38, -0.05, sz * 0.38));
+  for (let i = 0; i < 4; i++) { const a = i * 1.6 + 0.4; g.add(mesh(cyl(0.01, 0.01, 0.3, 4), mat('#3f8f3f'), Math.cos(a) * 1.0, 0.15, Math.sin(a) * 1.0), mesh(ball(0.06, 0), mat(BRIGHT[i]), Math.cos(a) * 1.0, 0.3, Math.sin(a) * 1.0)); }
+  for (let i = 0; i < 2; i++) g.add(mesh(capsule(0.02, 0.06), mat('#e8a317', { roughness: 0.2 }), -0.15 + i * 0.3, 0.6, 0.38));
+  g.add(mesh(box(0.25, 0.03, 0.12), mat('#8b5a36'), 0, 0.78, 0.45), mesh(dome(0.18, 0.5), mat('#c99a3a'), 0, 1.55, 0), mesh(cyl(0.02, 0.02, 0.15, 6), mat('#8b5a36'), 0, 1.7, 0));
   return g;
 }
 function piano() {
@@ -2564,6 +3419,13 @@ function piano() {
   for (let i = 0; i < 10; i++) g.add(mesh(box(0.07, 0.05, 0.18), black, -0.68 + i * 0.15 + (i % 3 === 2 ? 0.04 : 0), 0.82, 0.27));
   for (const s of [-1, 1]) g.add(mesh(box(0.1, 0.7, 0.1), black, s * 0.78, 0.35, 0.42));
   g.add(mesh(box(0.7, 0.08, 0.35), black, 0, 0.5, 0.95), mesh(box(0.08, 0.5, 0.08), black, 0, 0.25, 0.95));
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  const ivory = mat('#fbfbf5'), ebony = mat('#15161a', { roughness: 0.2, metalness: 0.3 });
+  for (let i = 0; i < 10; i++) g.add(mesh(box(0.13, 0.02, 0.28), ivory, -0.7 + i * 0.155, 0.805, 0.32));
+  for (let i = 0; i < 3; i++) g.add(mesh(box(0.06, 0.02, 0.12), mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), (i - 1) * 0.12, 0.05, 0.35));
+  g.add(mesh(box(0.9, 0.04, 0.12), ebony, 0, 1.25, 0.12).rotateX(-0.3), mesh(box(0.7, 0.4, 0.01), ivory, 0, 1.43, 0.16).rotateX(-0.3));
+  for (const s of [-1, 1]) g.add(mesh(cyl(0.02, 0.03, 0.2, 8), mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), s * 0.6, 1.4, 0.05), mesh(ball(0.03), glow('#ffcc66', 2), s * 0.6, 1.53, 0.05));
   return g;
 }
 function drums() {
@@ -2579,6 +3441,13 @@ function drums() {
     cym.rotation.z = s * 0.15;
     g.add(cym);
   }
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  const chromeD = mat('#d9dee6', { metalness: 0.85, roughness: 0.2 });
+  for (let i = 0; i < 4; i++) { const a = (i / 4) * Math.PI * 2; g.add(mesh(box(0.04, 0.4, 0.04), chromeD, Math.cos(a) * 0.5, 0.5, Math.sin(a) * 0.5 * 0.1 + 0.0)); }
+  for (const s of [-1, 1]) put(g, mesh(cyl(0.012, 0.008, 0.4, 6), mat('#e9d6a8'), s * 0.15, 1.3, 0.2)).rotation.z = s * 0.6;
+  g.add(mesh(cyl(0.2, 0.2, 0.015, 16), chromeD, -0.9, 1.0, 0.3), mesh(cyl(0.2, 0.2, 0.015, 16), chromeD, -0.9, 1.03, 0.3), mesh(cyl(0.015, 0.015, 1.0, 6), chromeD, -0.9, 0.5, 0.3));
+  g.add(mesh(rbox(0.5, 0.06, 0.5, 0.03), mat('#2b2e35'), 0, 0.03, -0.6));
   return g;
 }
 function guitar(R, night, anims, held) {
@@ -2593,6 +3462,10 @@ function guitar(R, night, anims, held) {
   const wrap = new THREE.Group();
   wrap.add(g, amp, mesh(cyl(0.22, 0.22, 0.02, 16), mat('#6d727a'), 0.9, 0.38, 0.01));
   wrap.children[2].rotation.x = Math.PI / 2;
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  for (let i = 0; i < 4; i++) g.add(mesh(box(0.004, 1.15, 0.004), mat('#e9e9e9'), (i - 1.5) * 0.016, 1.05, 0.05));
+  for (let i = 0; i < 4; i++) g.add(mesh(cyl(0.012, 0.012, 0.05, 6), _au, (i % 2 ? 0.07 : -0.07), 1.76 + (i < 2 ? 0 : 0.07), 0.02).rotateZ(Math.PI / 2));
   return wrap;
 }
 function easel(R) {
@@ -2610,6 +3483,15 @@ function easel(R) {
     blob.scale.z = 0.05;
     g.add(blob);
   }
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  for (let i = 0; i < 3; i++) put(g, mesh(cyl(0.008, 0.008, 0.22, 6), _w, -0.2 + i * 0.12, 0.98, 0.12)).rotation.z = 1.4;
+  const pal = mesh(cyl(0.18, 0.18, 0.015, 16), mat('#d9b38a'), 0.7, 0.9, 0.3);
+  pal.rotation.x = -0.6;
+  g.add(pal);
+  for (let i = 0; i < 4; i++) g.add(mesh(ball(0.025), mat(BRIGHT[i]), 0.7 + Math.cos(i * 1.5) * 0.1, 0.92 + Math.sin(i * 1.5) * 0.06, 0.3 - Math.sin(i * 1.5) * 0.06));
+  g.add(mesh(cyl(0.18, 0.18, 0.04, 12), _w, -0.8, 0.5, 0.3));
+  for (let i = 0; i < 2; i++) g.add(mesh(cyl(0.02, 0.02, 0.5, 6), _w, -0.8 + (i ? 0.1 : -0.1), 0.25, 0.3));
   return g;
 }
 function globe(R, night, anims) {
@@ -2625,6 +3507,13 @@ function globe(R, night, anims) {
   }
   w.rotation.z = 0.4;
   anims.push((t) => { w.rotation.y = t * 0.7; });
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  const wv = g.children[2];
+  for (let i = 0; i < 4; i++) { const land = mesh(ball(0.1 + i * 0.02), mat('#4f9a4a')); land.position.setFromSphericalCoords(0.42, 1 + i * 0.4, i * 1.6 + 0.8); wv.add(land); }
+  put(g, mesh(new THREE.TorusGeometry(0.52, 0.015, 6, 28, Math.PI), _au, 0, 1.4, 0)).rotation.z = 0.4 - Math.PI / 2;
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) g.add(mesh(ball(0.06), mat('#5d3b22'), sx * 0.35, 0.0, sz * 0.35));
+  g.add(mesh(rbox(0.3, 0.08, 0.02, 0.01), _au, 0, 0.5, 0.41));
   return g;
 }
 function trophy() {
@@ -2632,6 +3521,12 @@ function trophy() {
   g.add(mesh(box(0.7, 0.9, 0.7), mat('#e9e4d8'), 0, 0.45, 0), mesh(box(0.4, 0.15, 0.4), mat('#24272d'), 0, 0.98, 0));
   g.add(mesh(cyl(0.05, 0.12, 0.3, 12), gold, 0, 1.2, 0), mesh(cyl(0.28, 0.1, 0.45, 16), gold, 0, 1.55, 0));
   for (const s of [-1, 1]) g.add(mesh(new THREE.TorusGeometry(0.13, 0.025, 6, 14), gold, s * 0.3, 1.58, 0));
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  g.add(mesh(rbox(0.5, 0.12, 0.02, 0.02), _au, 0, 0.5, 0.36), mesh(gem(0.1), _au, 0, 1.95, 0));
+  for (const y of [0.05, 0.88]) g.add(mesh(box(0.74, 0.04, 0.74), mat('#cfc9bc'), 0, y, 0));
+  g.add(mesh(ball(0.06), _au, 0, 1.33, 0), put(new THREE.Group(), mesh(new THREE.TorusGeometry(0.28, 0.02, 6, 20), _au, 0, 1.78, 0)));
+  g.children[g.children.length - 1].rotation.x = Math.PI / 2;
   return g;
 }
 function rainbow() {
@@ -2642,6 +3537,14 @@ function rainbow() {
     g.add(arc);
   });
   g.position.y = -2;
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  for (const s of [-1, 1]) for (let i = 0; i < 3; i++) {
+    const c = new THREE.Mesh(ball(3 + i, 1), new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.85, fog: false }));
+    c.position.set(s * (31 + i * 3), 1 + (i % 2), 0);
+    c.scale.y = 0.6;
+    g.add(c);
+  }
   return g;
 }
 function swordstone() {
@@ -2650,6 +3553,10 @@ function swordstone() {
   stone.scale.set(1.3, 0.8, 1.1);
   g.add(stone, mesh(box(0.09, 1.1, 0.03), metal('#d9dee6'), 0, 1.35, 0), mesh(box(0.42, 0.07, 0.07), metal('#d9b23a'), 0, 1.9, 0));
   g.add(mesh(cyl(0.035, 0.035, 0.3, 8), mat('#5d3b22'), 0, 2.08, 0), mesh(ball(0.06), metal('#d9b23a'), 0, 2.26, 0));
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  for (let i = 0; i < 2; i++) { const mo = mesh(dome(0.3, 0.4), mat('#5f8a3a'), (i ? 0.5 : -0.6), 0.45, (i ? 0.2 : -0.1)); mo.scale.y = 0.4; g.add(mo); }
+  for (let i = 0; i < 3; i++) g.add(mesh(box(0.06, 0.12, 0.02), glow('#7ae7ff', 1.2), -0.25 + i * 0.25, 0.35, 0.82));
   return g;
 }
 function dish() {
@@ -2661,6 +3568,11 @@ function dish() {
   const feed = mesh(cyl(0.02, 0.02, 0.9, 6), metal('#2b2e35'), 0, 2.05, 0.55);
   feed.rotation.x = 0.9;
   g.add(feed);
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  g.add(mesh(cyl(0.45, 0.5, 0.12, 16), _fe, 0, 0.06, 0), mesh(ball(0.1), _d, 0, 1.7, 0));
+  put(g, mesh(new THREE.TorusGeometry(0.85, 0.03, 6, 28), mat('#dcdcdc'), 0, 2.45, 0.1)).rotation.x = -0.9 + Math.PI / 2;
+  for (const s of [-1, 1]) put(g, mesh(cyl(0.015, 0.015, 1.0, 4), _d, s * 0.3, 2.1, 0.3)).rotation.set(0.9, 0, s * 0.3);
   return g;
 }
 function wheelbarrow() {
@@ -2675,6 +3587,10 @@ function wheelbarrow() {
   const dirt = mesh(ball(0.38), mat('#6b4a2b', { roughness: 1 }), 0, 0.85, -0.1);
   dirt.scale.y = 0.5;
   g.add(dirt);
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  for (const s of [-1, 1]) g.add(mesh(capsule(0.03, 0.12), mat('#e63946'), s * 0.35, 0.5, -1.4).rotateX(Math.PI / 2), mesh(box(0.08, 0.04, 0.12), _d, s * 0.3, 0.02, -0.5));
+  for (let i = 0; i < 3; i++) g.add(mesh(ico(0.07, 0), flat('#5a3d22'), (i - 1) * 0.15, 0.98, -0.1 + (i % 2) * 0.1));
   return g;
 }
 function bathtub() {
@@ -2685,12 +3601,24 @@ function bathtub() {
   g.add(tub, mesh(box(1.5, 0.04, 0.8), mat('#9fd3f0', { transparent: true, opacity: 0.8 }), 0, 0.9, 0));
   for (let i = 0; i < 7; i++) g.add(mesh(ball(0.12 + (i % 3) * 0.04), mat('#ffffff', { transparent: true, opacity: 0.9 }), -0.5 + i * 0.17, 0.98, (i % 2) * 0.25 - 0.12));
   g.add(mesh(cyl(0.025, 0.025, 0.5, 8), metal(), 0.85, 1.1, 0));
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) g.add(mesh(ball(0.08), _au, sx * 0.6, 0.08, sz * 0.32));
+  g.add(mesh(ball(0.08), mat('#f2c230'), -0.3, 0.98, 0.1), mesh(ball(0.05), mat('#f2c230'), -0.25, 1.08, 0.13), mesh(cone(0.025, 0.05, 6), mat('#f28c1a'), -0.2, 1.08, 0.14).rotateZ(-Math.PI / 2));
+  for (const s of [-1, 1]) g.add(mesh(cyl(0.035, 0.035, 0.04, 8), mat('#d9dee6', { metalness: 0.8, roughness: 0.25 }), 0.85, 1.25, s * 0.1));
+  g.add(mesh(cyl(0.004, 0.004, 0.3, 4), _fe, 0.75, 0.8, 0.0));
   return g;
 }
 function fridge() {
   const g = new THREE.Group(), white = mat('#eef0f2', { roughness: 0.25, metalness: 0.2 });
   g.add(mesh(box(0.9, 1.9, 0.8), white, 0, 0.95, 0), mesh(box(0.86, 0.02, 0.02), mat('#9aa0a8'), 0, 1.3, 0.41));
   for (const y of [1.55, 1.0]) g.add(mesh(box(0.04, 0.35, 0.05), metal(), 0.34, y, 0.43));
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  g.add(mesh(box(0.88, 0.015, 0.02), mat('#9aa0a8'), 0, 1.32, 0.41));
+  for (const s of [-1, 1]) g.add(mesh(cyl(0.04, 0.04, 0.05, 8), _d, s * 0.35, 0.0, 0.3));
+  ['#e63946', '#2a9d8f', '#f2c230'].forEach((c, i) => g.add(mesh(rbox(0.1, 0.1, 0.02, 0.02), mat(c), -0.25 + i * 0.13, 1.6 - (i % 2) * 0.15, 0.42)));
+  g.add(mesh(rbox(0.2, 0.26, 0.01, 0.01), mat('#ffffff'), -0.15, 0.95, 0.41));
   return g;
 }
 function computer() {
@@ -2700,6 +3628,13 @@ function computer() {
   g.add(mesh(box(0.85, 0.52, 0.05), dark, 0, 1.25, -0.15), mesh(box(0.78, 0.45, 0.01), glow('#7cc4ff', 1.3), 0, 1.25, -0.12));
   g.add(mesh(box(0.08, 0.2, 0.06), dark, 0, 0.92, -0.15), mesh(box(0.6, 0.03, 0.22), dark, 0, 0.84, 0.15));
   g.add(mesh(box(0.5, 0.5, 0.5), mat('#3d5a80'), 0, 0.5, 0.75), mesh(box(0.5, 0.6, 0.08), mat('#3d5a80'), 0, 0.9, 0.98));
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  g.add(mesh(rbox(0.07, 0.03, 0.11, 0.015), _d, 0.45, 0.83, 0.15), mesh(cyl(0.05, 0.045, 0.1, 12), mat('#f4f4f4'), -0.6, 0.87, 0.1));
+  g.add(mesh(new THREE.TorusGeometry(0.03, 0.008, 4, 10, Math.PI), mat('#f4f4f4'), -0.55, 0.88, 0.1));
+  g.add(mesh(cyl(0.08, 0.1, 0.03, 12), _d, 0.6, 0.83, -0.25), mesh(cyl(0.01, 0.01, 0.4, 4), _d, 0.6, 1.03, -0.25).rotateZ(-0.3), mesh(cone(0.1, 0.12, 12, true), mat('#f2c230'), 0.67, 1.22, -0.2));
+  for (let i = 0; i < 3; i++) g.add(mesh(box(0.54, 0.008, 0.04), mat('#3a3d44'), 0, 0.86, 0.09 + i * 0.06));
+  g.add(mesh(rbox(0.3, 0.02, 0.15, 0.01), _d, 0, 0.83, -0.15), mesh(box(0.22, 0.005, 0.3), mat('#ffffff'), -0.4, 0.83, -0.15).rotateY(0.3));
   return g;
 }
 function phonebooth(R, night) {
@@ -2708,6 +3643,12 @@ function phonebooth(R, night) {
   for (const sx of [-1, 1]) for (const sz of [-1, 1]) g.add(mesh(box(0.1, 2.4, 0.1), red, sx * 0.45, 1.25, sz * 0.45));
   g.add(mesh(box(0.85, 2.2, 0.85), night ? glow('#ffe7a3', 0.7) : mat('#bfe0f2', { transparent: true, opacity: 0.45, roughness: 0.1 }), 0, 1.25, 0));
   g.add(mesh(cyl(0.5, 0.5, 0.1, 4), red, 0, 2.68, 0));
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  g.add(mesh(rbox(0.8, 0.15, 0.05, 0.02), mat('#1d1d22'), 0, 2.35, 0.48), mesh(box(0.6, 0.08, 0.04), glow('#ffffff', 1), 0, 2.35, 0.51));
+  for (const y of [0.7, 1.2, 1.7]) g.add(mesh(box(0.85, 0.03, 0.03), red, 0, y, 0.46));
+  g.add(mesh(rbox(0.18, 0.28, 0.08, 0.02), mat('#1d1d22'), 0, 1.4, -0.38), mesh(gem(0.12), red, 0, 2.86, 0));
+  g.add(mesh(rbox(0.3, 0.3, 0.02, 0.02), mat('#f4f1e1'), 0, 1.0, -0.43));
   return g;
 }
 function busstop() {
@@ -2717,6 +3658,12 @@ function busstop() {
   g.add(mesh(box(2.2, 0.08, 0.4), mat('#8b5a36'), 0, 0.5, -0.2));
   for (const s of [-1, 1]) g.add(mesh(box(0.08, 0.5, 0.35), steel, s * 0.9, 0.25, -0.2));
   g.add(mesh(cyl(0.04, 0.04, 2.6, 8), steel, 2.0, 1.3, 0.3), mesh(box(0.5, 0.5, 0.04), mat('#1c7ed6'), 2.0, 2.4, 0.33));
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  g.add(mesh(rbox(0.9, 1.2, 0.04, 0.03), mat('#f4f1e1'), -0.9, 1.35, -0.48), mesh(rbox(0.5, 0.6, 0.03, 0.02), mat('#2e86ab'), 0.8, 1.5, -0.47));
+  for (const z of [-0.3, -0.1]) g.add(mesh(box(2.2, 0.04, 0.12), mat('#9a6a3c'), 0, 0.55, z));
+  for (const s of [-1, 1]) g.add(mesh(box(3.1, 0.06, 0.04), _fe, 0, 2.4, s * 0.64));
+  g.add(mesh(cyl(0.2, 0.18, 0.6, 12), mat('#2a9d8f'), 1.5, 0.3, 0.3), mesh(cyl(0.21, 0.21, 0.04, 12), _d, 1.5, 0.62, 0.3), mesh(rbox(0.5, 0.18, 0.02, 0.02), mat('#ffffff'), 2.0, 2.4, 0.35));
   return g;
 }
 function balloons(R, night, anims) {
@@ -2734,6 +3681,15 @@ function balloons(R, night, anims) {
   anims.push((t) => bunch.forEach((b, i) => {
     b.position.set(b.userData.x + Math.sin(t * 1.1 + i) * 0.12, b.userData.y + Math.sin(t * 1.6 + i * 2) * 0.08, b.userData.z);
   }));
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  for (let i = 0; i < 5; i++) {
+    const b = mesh(ball(0.22), mat(BRIGHT[(i + 2) % 7], { roughness: 0.25 }), Math.cos(i * 1.3) * 0.5, 2.0 + (i % 2) * 0.3, Math.sin(i * 1.3) * 0.3);
+    b.scale.y = 1.2;
+    g.add(b, mesh(cyl(0.005, 0.005, 1.9, 4), mat('#f4f4f4'), Math.cos(i * 1.3) * 0.25, 1.1, Math.sin(i * 1.3) * 0.15));
+  }
+  for (const s of [-1, 1]) g.add(mesh(new THREE.TorusGeometry(0.05, 0.015, 4, 10), mat('#e63946'), s * 0.06, 0.32, 0.15));
+  for (let i = 0; i < 3; i++) g.add(mesh(box(0.04, 0.005, 0.04), mat(BRIGHT[i]), (i - 1) * 0.4, 0.01, 0.4).rotateY(i));
   return g;
 }
 function bone() {
@@ -2748,6 +3704,19 @@ function bone() {
     b.rotation.y = i * 1.1;
     g.add(b);
   }
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  const w = mat('#f4efe2');
+  const third = new THREE.Group();
+  third.add(mesh(cyl(0.05, 0.05, 0.6, 8), w).rotateZ(Math.PI / 2));
+  for (const s of [-1, 1]) for (const z of [-1, 1]) third.add(mesh(ball(0.08), w, s * 0.32, 0, z * 0.06));
+  third.position.set(-0.6, 0.08, 0.5);
+  third.rotation.y = 2.2;
+  g.add(third, mesh(cyl(0.22, 0.18, 0.1, 18), mat('#d62828'), 0.7, 0.05, -0.3), mesh(cyl(0.17, 0.17, 0.02, 14), mat('#8a5a2b'), 0.7, 0.09, -0.3));
+  const mound = mesh(dome(0.3, 0.5), mat('#7a5a3a'), -0.2, 0, -0.5);
+  mound.scale.y = 0.4;
+  g.add(mound, mesh(rbox(0.12, 0.05, 0.01, 0.01), mat('#ffffff'), 0.7, 0.06, -0.12));
+  g.add(mesh(box(0.15, 0.005, 0.15), mat('#f4efe2'), 0.2, 0.002, 0.7));
   return g;
 }
 function shield() {
@@ -2760,6 +3729,11 @@ function shield() {
   g.add(sh, mesh(ball(0.1), metal('#d9b23a'), -0.3, 0.85, 0.15));
   const blade = mesh(box(0.07, 1.1, 0.02), metal('#d9dee6'), 0.4, 0.75, 0.1);
   g.add(blade, mesh(box(0.3, 0.06, 0.06), metal('#d9b23a'), 0.4, 1.28, 0.1));
+  const _w = mat('#6b4a2b'), _d = mat('#2b2e35'), _st = mat('#9a9da3'), _au = mat('#d9b23a', { metalness: 0.8, roughness: 0.3 }), _fe = mat('#8a9099', { metalness: 0.8, roughness: 0.3 });
+
+  for (let i = 0; i < 4; i++) { const a = (i * Math.PI) / 2 + 0.78; g.add(mesh(ball(0.035), _au, -0.3 + Math.cos(a) * 0.32, 0.85 + Math.sin(a) * 0.32, 0.15)); }
+  g.add(mesh(box(0.08, 0.6, 0.02), mat('#f2c230'), -0.3, 0.85, 0.15), mesh(box(0.45, 0.08, 0.02), mat('#f2c230'), -0.3, 0.9, 0.15));
+  g.add(mesh(dome(0.18, 0.55), _fe, 0, 1.4, 0));
   return g;
 }
 const PROP_BUILDERS = { beachball, kite, umbrella, books, bed, sofa, tv, clock, door, ladder, mailbox, trashcan,
@@ -2803,7 +3777,7 @@ function scatter(R, n, rmin, rmax, fn) {
       x = Math.cos(a) * r; z = Math.sin(a) * r;
     } while (((Math.abs(z) < 7 && Math.abs(x) < 48) || (FLAT && z > -3)) && ++k < 40);  // keep the stage (and, in 2D, the foreground) clear
     const obj = fn(x, z, i);
-    if (obj) { obj.position.x = x; obj.position.z = z; obj.rotation.y = R() * 6.28; }
+    if (obj) { obj.position.x = x; obj.position.z = z; obj.rotation.y = R() * 6.28; bakeInPlace(obj); }
   }
 }
 
@@ -3406,7 +4380,7 @@ function buildWorldShot(sc, idx) {
 
   // scenery
   const hills = (n, color) => scatter(R, n, 95, 150, () => {
-    const h = add(mesh(ball(26 + R() * 18, 1), mat(color)));
+    const h = add(mesh(soft(26 + R() * 18), mat(color)));
     h.scale.y = 0.35 + R() * 0.25; h.castShadow = false; h.position.y = -3;
     return h;
   });
@@ -3429,14 +4403,14 @@ function buildWorldShot(sc, idx) {
     scatter(R, 14, 11, 70, () => add(cactus(R)));
     scatter(R, 12, 9, 60, () => add(rock(R, '#b98b5e')));
     scatter(R, 14, 45, 150, () => {
-      const d = add(mesh(ball(18 + R() * 16, 1), mat('#dcb86c')));
+      const d = add(mesh(soft(18 + R() * 16), mat('#dcb86c')));
       d.scale.y = 0.22; d.castShadow = false; d.position.y = -1.5;
       return d;
     });
   } else if (setting === 'snow') {
     scatter(R, 34, 11, 85, () => add(pine(R, true)));
     scatter(R, 16, 9, 70, () => {
-      const m = add(mesh(ball(2 + R() * 3, 1), mat('#ffffff')));
+      const m = add(mesh(blob(2 + R() * 3), mat('#ffffff')));
       m.scale.y = 0.35; m.position.y = -0.2;
       return m;
     });
@@ -3491,7 +4465,7 @@ function buildWorldShot(sc, idx) {
     });
   } else if (setting === 'lake') {
     scatter(R, 10, 70, 140, () => {
-      const h = add(mesh(ball(24 + R() * 14, 1), mat('#4f8a4a')));
+      const h = add(mesh(soft(24 + R() * 14), mat('#4f8a4a')));
       h.scale.y = 0.4; h.castShadow = false; h.position.y = -3;
       return h;
     });
@@ -3527,7 +4501,7 @@ function buildWorldShot(sc, idx) {
     for (let i = 0; i < count; i++) {
       const c = new THREE.Group();
       for (let k = 0; k < 4; k++) {
-        const puff = new THREE.Mesh(ball(3 + R() * 3, 1), cm);
+        const puff = new THREE.Mesh(blob(3 + R() * 3), cm);
         puff.position.set(k * 3.6 - 5, R() * 1.5, R() * 3);
         puff.scale.y = 0.6;
         c.add(puff);
@@ -3805,6 +4779,7 @@ function start() {
   let total = 0;
   scenes.forEach((s) => { starts.push(total); total += s.duration; });
   const shots = [];
+  let galleryOn = false;
   let T = 0, playing = true, current = -1, shot = null, last = performance.now(), fade = 0, caption = '';
   let recorder = null, recCanvas = null, recCtx = null;
 
@@ -3930,6 +4905,47 @@ function start() {
   window.addEventListener('keydown', (ev) => { if (ev.code === 'Space') { ev.preventDefault(); $('play').click(); } });
   // Test hook: jump to a time and render one frame.
   window.story3d = { seek(time) { T = clamp(time, 0, total); setPlaying(false); draw(); }, total };
+  window.story3d.census = census;
+  window.story3d.info = () => ({ calls: renderer.info.render.calls, triangles: renderer.info.render.triangles });
+  // Every model of one family laid out in a grid, for checking detail by eye.
+  window.story3d.gallery = (family, page = 0, per = 20, close = false) => {
+    const R = mulberry(5), items = [];
+    if (family === 'actors') {
+      Object.entries(BUILDERS).forEach(([k, b]) => { if (k !== 'quad') items.push(b({ color: '#c77d4a' }, 'gallery' + k)); });
+      [{ color: '#b0793f', len: 0.9, leg: 0.4, ears: 'round', tail: 0.5 }, { color: '#7b4a2a', len: 1.7, leg: 0.95, width: 0.55, neck: 0.55, ears: 'up', tail: 0.7, mane: true },
+        { color: '#b5342b', len: 2.6, leg: 0.8, width: 0.9, neck: 0.8, ears: 'up', tail: 1.8, wings: true, breath: true }].forEach((o) => items.push(buildQuad(o)));
+    } else if (family === 'props') Object.values(PROP_BUILDERS).forEach((b) => items.push(b(mulberry(3), false, [], false, {})));
+    else if (family === 'food') Object.keys(FOOD_MAKERS).forEach((k) => items.push(buildFood(k)));
+    else items.push(tree(R, false), tree(R, false, true), pine(R, false), rock(R), flowers(R), cactus(R), house(R, false));
+    const shown = items.slice(page * per, page * per + per), cols = close ? per : 5, grid = new THREE.Group();
+    shown.forEach((o, i) => {
+      const box3 = new THREE.Box3().setFromObject(o), size = box3.getSize(new THREE.Vector3()), k = 1.6 / Math.max(size.x, size.y, size.z, 0.01);
+      const holder = new THREE.Group();
+      holder.add(o);
+      o.position.sub(box3.getCenter(new THREE.Vector3())).multiplyScalar(1);
+      holder.scale.setScalar(k);
+      holder.position.set((i % cols - (cols - 1) / 2) * 2.1, -Math.floor(i / cols) * 2.1 + 3, 0);
+      holder.rotation.y = -0.5;
+      grid.add(holder);
+    });
+    scene.children.filter((c) => c.userData.gallery || (shot && c === shot.root)).forEach((c) => scene.remove(c));
+    grid.userData.gallery = true;
+    scene.add(grid);
+    scene.background = new THREE.Color('#dfe6ee');
+    scene.fog.near = 500; scene.fog.far = 900;
+    sun.intensity = 2.4; hemi.intensity = 1.3;
+    sun.position.set(20, 40, 30); sun.target.position.set(0, 0, 0);
+    camera.fov = 48; camera.updateProjectionMatrix();
+    camera.position.set(0, close ? 3 : 0.2, close ? per * 1.15 + 1 : 13.5);
+    camera.lookAt(0, close ? 3 : 0.2, 0);
+    playing = false;
+    galleryOn = true;
+    $('fade').style.opacity = 0;
+    $('caption').textContent = '';
+    $('bar').style.display = 'none';
+    renderer.render(scene, camera);
+    return shown.length;
+  };
 
   function frame(now) {
     const dt = Math.min(0.1, (now - last) / 1000);
@@ -3938,10 +4954,26 @@ function start() {
       T += dt;
       if (T >= total) { T = total; setPlaying(false); stopRecording(); }
     }
-    draw();
+    if (!galleryOn) draw();
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
+}
+
+// How many parts every model is made of (used by the tests to keep detail up).
+function census() {
+  const count = (o) => { let n = 0, tris = 0; o.traverse((m) => { if (m.isMesh) { n += 1; const g = m.geometry; tris += (g.index ? g.index.count : g.attributes.position.count) / 3; } }); return [n, Math.round(tris)]; };
+  const R = mulberry(5), out = { actors: {}, props: {}, food: {}, scenery: {} };
+  const quads = { dog: { color: '#b0793f', len: 0.9, leg: 0.4, ears: 'round', tail: 0.5 },
+    horse: { color: '#7b4a2a', len: 1.7, leg: 0.95, width: 0.55, neck: 0.55, ears: 'up', tail: 0.7, mane: true },
+    dragon: { color: '#b5342b', len: 2.6, leg: 0.8, width: 0.9, neck: 0.8, ears: 'up', tail: 1.8, wings: true, breath: true } };
+  Object.entries(BUILDERS).forEach(([k, b]) => { if (k !== 'quad') out.actors[k] = count(b({ color: '#888888' }, 'census')); });
+  Object.entries(quads).forEach(([k, o]) => { out.actors['quad:' + k] = count(buildQuad(o)); });
+  Object.entries(PROP_BUILDERS).forEach(([k, b]) => { out.props[k] = count(b(mulberry(3), false, [], false, {})); });
+  Object.keys(FOOD_MAKERS).forEach((k) => { out.food[k] = count(buildFood(k)); });
+  out.scenery = { tree: count(tree(R, false)), palm: count(tree(R, false, true)), pine: count(pine(R, false)),
+    rock: count(rock(R)), flowers: count(flowers(R)), cactus: count(cactus(R)), house: count(house(R, false)) };
+  return out;
 }
 
 function fail(message) {

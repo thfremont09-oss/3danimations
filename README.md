@@ -130,6 +130,20 @@ board = build_storyboard("At night a fox ran through the forest.", liberty=1)
 open("fox.html", "w").write(render_html(board, style="2d"))
 ```
 
+## Checking the models
+
+Every character, vehicle, object and food is built from simple shapes in
+`story3d/static/viewer.js`. Open any generated page and use the browser
+console to inspect them:
+
+- `story3d.gallery('actors' | 'props' | 'food' | 'scenery', page)` lays the
+  models out in a grid (20 per page); add `, 1, true` for a single close-up.
+- `story3d.census()` counts the parts and triangles in every model.
+- `story3d.info()` reports draw calls and triangles for the current frame.
+
+Background scenery and the rigid parts of each model are fused into a few
+meshes per material, so the extra detail costs little to draw.
+
 ## Tests
 
 ```bash
